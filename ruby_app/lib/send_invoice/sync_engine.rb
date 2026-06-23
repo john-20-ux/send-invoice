@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "thread"
+require "time"
 
 module SendInvoice
   class SyncEngine
@@ -8,7 +9,7 @@ module SendInvoice
 
     ORDERS_QUERY = <<~GRAPHQL
       query SyncOrders($cursor: String, $query: String) {
-        orders(first: 50, after: $cursor, query: $query, sortKey: CREATED_AT) {
+        orders(first: 100, after: $cursor, query: $query, sortKey: UPDATED_AT) {
           pageInfo {
             hasNextPage
             endCursor
@@ -18,10 +19,11 @@ module SendInvoice
               id
               name
               createdAt
+              updatedAt
               fullyPaid
               displayFinancialStatus
               displayFulfillmentStatus
-              lineItems(first: 50) {
+              lineItems(first: 100) {
                 edges {
                   node {
                     id
@@ -69,30 +71,33 @@ module SendInvoice
       @shopify_client = shopify_client
       @rate_limits = {}
       @mutex = Mutex.new
+      @scheduler_thread = nil
     end
 
-    def trigger(shop:, type: "incremental")
+    def trigger(shop:, type: "incremental", skip_rate_limit: false)
       shop_domain = shop.fetch("shop_domain")
       current = @store.latest_sync_log(shop_domain)
       return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
 
-      if type == "incremental"
+      if type == "incremental" && !skip_rate_limit
         limited_for = rate_limited_for(shop_domain)
         return { "started" => false, "message" => "Rate limited. Try again in #{limited_for}s." } if limited_for
       end
 
-      last_completed = type == "incremental" ? @store.last_completed_sync(shop_domain) : nil
-      total_estimated = @config.mock_mode? ? filtered_mock_orders(last_completed&.fetch("finished_at", nil)).length : 0
+      sync_state = type == "incremental" ? @store.sync_state(shop_domain) : nil
+      last_order_updated_at = sync_state && sync_state["last_order_updated_at"]
+      total_estimated = @config.mock_mode? ? filtered_mock_orders(last_order_updated_at).length : 0
       sync_log = @store.create_sync_log(shop_domain, total_estimated: total_estimated)
-      touch_rate_limit(shop_domain) if type == "incremental"
+      touch_rate_limit(shop_domain) if type == "incremental" && !skip_rate_limit
 
       Thread.new do
         Thread.current.abort_on_exception = false
         begin
           if @config.mock_mode?
-            run_mock_sync(sync_log["id"], shop_domain, last_completed&.fetch("finished_at", nil))
+            run_mock_sync(sync_log["id"], shop_domain, last_order_updated_at, type)
           else
-            run_shopify_sync(sync_log["id"], shop, last_completed&.fetch("finished_at", nil))
+            run_shopify_sync(sync_log["id"], shop, last_order_updated_at, type)
           end
         rescue StandardError => e
           @store.fail_sync_log(sync_log["id"], e.message)
@@ -100,6 +105,41 @@ module SendInvoice
       end
 
       { "started" => true, "syncLogId" => sync_log["id"] }
+    end
+
+    def trigger_all(type: "incremental", skip_rate_limit: false)
+      shops = if @config.mock_mode?
+                [@store.ensure_shop(MockData::DEMO_SHOP_DOMAIN, "shop_name" => MockData::DEMO_SHOP_NAME)]
+              else
+                @store.syncable_shops
+              end
+
+      shops.map do |shop|
+        {
+          "shopDomain" => shop["shop_domain"],
+          "result" => trigger(shop: shop, type: type, skip_rate_limit: skip_rate_limit)
+        }
+      end
+    end
+
+    def start_scheduler
+      return false unless @config.auto_sync_enabled
+      return false if @scheduler_thread&.alive?
+
+      @scheduler_thread = Thread.new do
+        Thread.current.abort_on_exception = false
+        loop do
+          begin
+            trigger_all(type: "incremental", skip_rate_limit: true)
+          rescue StandardError => e
+            warn "[send-invoice] auto sync failed: #{e.class}: #{e.message}"
+          ensure
+            sleep @config.auto_sync_interval_seconds
+          end
+        end
+      end
+
+      true
     end
 
     def status(shop_domain)
@@ -149,16 +189,20 @@ module SendInvoice
       end
     end
 
-    def filtered_mock_orders(last_synced_at = nil)
-      return MockData.orders unless last_synced_at
+    def filtered_mock_orders(last_order_updated_at = nil)
+      return MockData.orders unless last_order_updated_at
 
-      cutoff = Time.parse(last_synced_at)
-      MockData.orders.select { |order| Time.parse(order["created_at"]) >= cutoff }
+      cutoff = Time.parse(last_order_updated_at)
+      MockData.orders.select { |order| Time.parse(order["updated_at"] || order["created_at"]) >= cutoff }
     end
 
-    def run_mock_sync(sync_log_id, shop_domain, last_synced_at = nil)
-      orders = filtered_mock_orders(last_synced_at).map do |order|
-        order.merge("shop_domain" => shop_domain, "synced_at" => Time.now.utc.iso8601)
+    def run_mock_sync(sync_log_id, shop_domain, last_order_updated_at = nil, sync_type = "incremental")
+      orders = filtered_mock_orders(last_order_updated_at).map do |order|
+        order.merge(
+          "shop_domain" => shop_domain,
+          "updated_at" => order["updated_at"] || order["created_at"],
+          "synced_at" => Time.now.utc.iso8601
+        )
       end
 
       batch_size = 40
@@ -167,6 +211,11 @@ module SendInvoice
 
       if total.zero?
         @store.complete_sync_log(sync_log_id, total_estimated: 0)
+        @store.upsert_sync_state(shop_domain, {
+          "last_order_updated_at" => last_order_updated_at,
+          "last_cursor" => nil,
+          "last_sync_type" => sync_type
+        })
         return
       end
 
@@ -178,13 +227,19 @@ module SendInvoice
       end
 
       @store.complete_sync_log(sync_log_id, total_estimated: total)
+      @store.upsert_sync_state(shop_domain, {
+        "last_order_updated_at" => max_order_updated_at(orders),
+        "last_cursor" => nil,
+        "last_sync_type" => sync_type
+      })
     end
 
-    def run_shopify_sync(sync_log_id, shop, last_synced_at = nil)
+    def run_shopify_sync(sync_log_id, shop, last_order_updated_at = nil, sync_type = "incremental")
       cursor = nil
       synced = 0
       total_estimated = 0
-      query_filter = last_synced_at ? "created_at:>='#{last_synced_at}'" : nil
+      highest_order_updated_at = last_order_updated_at
+      query_filter = sync_type == "incremental" && last_order_updated_at ? "updated_at:>=#{last_order_updated_at}" : nil
 
       loop do
         data = @shopify_client.graph_ql(shop.fetch("shop_domain"), shop.fetch("access_token"), ORDERS_QUERY, {
@@ -200,6 +255,7 @@ module SendInvoice
             map_order_node(edge.fetch("node"), shop.fetch("shop_domain"))
           end
           @store.upsert_orders(orders)
+          highest_order_updated_at = [highest_order_updated_at, max_order_updated_at(orders)].compact.max
           synced += orders.length
           total_estimated = [synced, total_estimated].max
           @store.update_sync_log_progress(sync_log_id, synced, total_estimated)
@@ -211,6 +267,11 @@ module SendInvoice
       end
 
       @store.complete_sync_log(sync_log_id, total_estimated: total_estimated)
+      @store.upsert_sync_state(shop.fetch("shop_domain"), {
+        "last_order_updated_at" => highest_order_updated_at,
+        "last_cursor" => nil,
+        "last_sync_type" => sync_type
+      })
     rescue StandardError => e
       @store.fail_sync_log(sync_log_id, e.message)
       raise
@@ -223,6 +284,7 @@ module SendInvoice
         "shop_domain" => shop_domain,
         "name" => node["name"],
         "created_at" => node["createdAt"],
+        "updated_at" => node["updatedAt"] || node["createdAt"],
         "fully_paid" => node["fullyPaid"] || false,
         "financial_status" => node["displayFinancialStatus"] || "PENDING",
         "fulfillment_status" => node["displayFulfillmentStatus"],
@@ -261,6 +323,10 @@ module SendInvoice
         "raw_data" => node,
         "synced_at" => Time.now.utc.iso8601
       }
+    end
+
+    def max_order_updated_at(orders)
+      orders.map { |order| order["updated_at"] || order["created_at"] }.compact.max
     end
 
     def money(node)

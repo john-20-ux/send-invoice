@@ -69,7 +69,114 @@ class SendInvoiceAppTest < Minitest::Test
     assert_equal true, store.shop(shop["shop_domain"])["onboarded"]
   end
 
+  def test_shopify_graphql_sync_paginates_and_persists_watermark
+    store, sync_engine, shopify_client, database_path = build_real_sync_engine
+    shop = store.shop("sync-test.myshopify.com")
+
+    result = sync_engine.trigger(shop: shop, type: "full")
+    assert_equal true, result["started"]
+
+    wait_for_sync(store, shop["shop_domain"])
+    orders = store.orders(shop["shop_domain"], limit: 10)["orders"]
+    updated_order = orders.find { |order| order["name"] == "#1002" }
+    state = store.sync_state(shop["shop_domain"])
+
+    assert_equal 2, orders.length
+    refute_nil updated_order
+    assert_equal "2026-06-11T10:30:00Z", updated_order["updated_at"]
+    assert_equal "2026-06-11T10:30:00Z", state["last_order_updated_at"]
+
+    incremental = sync_engine.trigger(shop: shop, type: "incremental")
+    assert_equal true, incremental["started"]
+    wait_for_sync(store, shop["shop_domain"])
+    assert_includes shopify_client.calls.map { |call| call["query"] }, "updated_at:>=2026-06-11T10:30:00Z"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV.delete("MOCK_MODE")
+  end
+
   private
+
+  class FakeShopifyClient
+    attr_reader :calls
+
+    def initialize
+      @calls = []
+    end
+
+    def graph_ql(_shop_domain, _access_token, _query, variables = {})
+      @calls << variables
+      cursor = variables["cursor"]
+      if cursor
+        page("#1002", "gid://shopify/Order/1002", "2026-06-11T10:30:00Z", false)
+      else
+        page("#1001", "gid://shopify/Order/1001", "2026-06-10T09:00:00Z", true)
+      end
+    end
+
+    private
+
+    def page(name, id, updated_at, has_next_page)
+      {
+        "orders" => {
+          "pageInfo" => {
+            "hasNextPage" => has_next_page,
+            "endCursor" => has_next_page ? "next-cursor" : nil
+          },
+          "edges" => [
+            {
+              "node" => {
+                "id" => id,
+                "name" => name,
+                "createdAt" => "2026-06-09T08:00:00Z",
+                "updatedAt" => updated_at,
+                "fullyPaid" => true,
+                "displayFinancialStatus" => "PAID",
+                "displayFulfillmentStatus" => "FULFILLED",
+                "totalDiscountsSet" => money("0.00"),
+                "totalPriceSet" => money("125.00"),
+                "totalRefundedSet" => money("0.00"),
+                "totalShippingPriceSet" => money("10.00"),
+                "totalTaxSet" => money("5.00"),
+                "totalTipReceivedSet" => money("0.00"),
+                "totalWeight" => 200,
+                "transactions" => [{ "amountSet" => money("125.00") }],
+                "customer" => {
+                  "id" => "gid://shopify/Customer/1",
+                  "firstName" => "Ada",
+                  "lastName" => "Lovelace",
+                  "email" => "ada@example.com",
+                  "phone" => nil
+                },
+                "lineItems" => {
+                  "edges" => [
+                    {
+                      "node" => {
+                        "id" => "#{id}/LineItem/1",
+                        "sku" => "SKU-1",
+                        "title" => "Notebook",
+                        "variantTitle" => "Black",
+                        "vendor" => "Paper Co",
+                        "quantity" => 1,
+                        "currentQuantity" => 1,
+                        "originalTotalSet" => money("110.00")
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    end
+
+    def money(amount)
+      { "shopMoney" => { "amount" => amount, "currencyCode" => "USD" } }
+    end
+  end
 
   def build_app(onboarded:, order_count:)
     database_path = File.join(Dir.tmpdir, "send_invoice_test_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
@@ -94,6 +201,41 @@ class SendInvoiceAppTest < Minitest::Test
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
 
     [app, store, database_path]
+  end
+
+  def build_real_sync_engine
+    database_path = File.join(Dir.tmpdir, "send_invoice_real_sync_test_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
+    root = File.expand_path("../..", __dir__)
+    ENV["DATABASE_PATH"] = database_path
+    ENV["SHOPIFY_API_KEY"] = "test-key"
+    ENV["SHOPIFY_API_SECRET"] = "test-secret"
+    ENV["MOCK_MODE"] = "false"
+    ENV.delete("AUTO_SYNC_ENABLED")
+
+    config = SendInvoice::Configuration.load(root: root)
+    database = SendInvoice::Database.new(config)
+    SendInvoice::Migrator.new(database).run
+    store = SendInvoice::Store.new(database)
+    store.ensure_shop("sync-test.myshopify.com", {
+      "shop_name" => "Sync Test",
+      "access_token" => "shpat_test",
+      "onboarded" => true
+    })
+    shopify_client = FakeShopifyClient.new
+    sync_engine = SendInvoice::SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
+
+    [store, sync_engine, shopify_client, database_path]
+  end
+
+  def wait_for_sync(store, shop_domain)
+    40.times do
+      latest = store.latest_sync_log(shop_domain)
+      return latest if latest && latest["status"] != "running"
+
+      sleep 0.05
+    end
+
+    flunk "Timed out waiting for sync to finish"
   end
 
   def perform(app, method, path, query = {}, cookies = [])

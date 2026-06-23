@@ -34,6 +34,7 @@ module SendInvoice
             shop_domain TEXT NOT NULL,
             name TEXT,
             created_at TEXT,
+            updated_at TEXT,
             fully_paid INTEGER NOT NULL DEFAULT 0,
             financial_status TEXT,
             fulfillment_status TEXT,
@@ -59,6 +60,7 @@ module SendInvoice
           );
 
           CREATE INDEX IF NOT EXISTS idx_orders_shop_created ON orders(shop_domain, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_orders_shop_updated ON orders(shop_domain, updated_at DESC);
 
           CREATE TABLE IF NOT EXISTS sync_logs (
             id TEXT PRIMARY KEY,
@@ -74,6 +76,16 @@ module SendInvoice
 
           CREATE INDEX IF NOT EXISTS idx_sync_logs_shop_started ON sync_logs(shop_domain, started_at DESC);
 
+          CREATE TABLE IF NOT EXISTS sync_states (
+            shop_domain TEXT PRIMARY KEY,
+            last_order_updated_at TEXT,
+            last_cursor TEXT,
+            last_sync_type TEXT,
+            last_synced_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE
+          );
+
           CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             shop_domain TEXT,
@@ -82,7 +94,19 @@ module SendInvoice
             updated_at TEXT NOT NULL
           );
         SQL
+
+        ensure_column(db, "orders", "updated_at", "TEXT")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_orders_shop_updated ON orders(shop_domain, updated_at DESC)")
       end
+    end
+
+    private
+
+    def ensure_column(db, table, column, definition)
+      columns = db.execute("PRAGMA table_info(#{table})").map { |row| row["name"] || row[1] }
+      return if columns.include?(column)
+
+      db.execute("ALTER TABLE #{table} ADD COLUMN #{column} #{definition}")
     end
   end
 end

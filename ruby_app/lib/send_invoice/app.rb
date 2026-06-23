@@ -158,6 +158,8 @@ module SendInvoice
         api_orders
       when ["POST", "/api/sync"]
         api_sync
+      when ["POST", "/api/sync/all"]
+        api_sync_all
       when ["GET", "/api/sync/status"]
         api_sync_status
       else
@@ -605,6 +607,17 @@ module SendInvoice
       respond_json(@sync_engine.trigger(shop: shop, type: type))
     end
 
+    def api_sync_all
+      authorize_sync_secret!
+      payload = request_payload
+      type = payload["type"].to_s == "full" ? "full" : "incremental"
+      respond_json(
+        startedAt: Time.now.utc.iso8601,
+        type: type,
+        shops: @sync_engine.trigger_all(type: type, skip_rate_limit: true)
+      )
+    end
+
     def api_sync_status
       shop = require_shop
       respond_json(@sync_engine.status(shop["shop_domain"]))
@@ -840,6 +853,26 @@ module SendInvoice
       JSON.parse(@request.body)
     rescue JSON::ParserError
       {}
+    end
+
+    def authorize_sync_secret!
+      return true if @config.mock_mode?
+
+      secret = @config.sync_api_secret.to_s
+      provided = header_value("x-sync-secret").to_s
+      raise UnauthorizedError, "SYNC_API_SECRET is required for automated sync" if secret.empty?
+      raise UnauthorizedError, "Invalid sync secret" unless secure_compare(provided, secret)
+
+      true
+    end
+
+    def secure_compare(left, right)
+      return false unless left.bytesize == right.bytesize
+
+      left_bytes = left.unpack("C*")
+      result = 0
+      right.each_byte.with_index { |byte, index| result |= byte ^ left_bytes[index] }
+      result.zero?
     end
 
     def single_value(value)

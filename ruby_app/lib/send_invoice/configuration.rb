@@ -4,6 +4,8 @@ module SendInvoice
   class Configuration
     attr_reader :api_version,
                 :app_root,
+                :auto_sync_enabled,
+                :auto_sync_interval_seconds,
                 :database_path,
                 :host,
                 :port,
@@ -13,6 +15,7 @@ module SendInvoice
                 :shopify_api_key,
                 :shopify_api_secret,
                 :shopify_scopes,
+                :sync_api_secret,
                 :views_path
 
     def self.load(root:)
@@ -49,7 +52,10 @@ module SendInvoice
       @shopify_api_key = env["SHOPIFY_API_KEY"].to_s
       @shopify_api_secret = env["SHOPIFY_API_SECRET"].to_s
       @shopify_scopes = env.fetch("SHOPIFY_SCOPES", "read_orders").split(",").map(&:strip).reject(&:empty?)
-      @api_version = env["SHOPIFY_API_VERSION"] || "2026-01"
+      @api_version = env["SHOPIFY_API_VERSION"] || "2026-04"
+      @auto_sync_enabled = env["AUTO_SYNC_ENABLED"] == "true"
+      @auto_sync_interval_seconds = [Integer(env["AUTO_SYNC_INTERVAL_SECONDS"] || "300", 10), 60].max
+      @sync_api_secret = env["SYNC_API_SECRET"].to_s
       @session_cookie_name = env["SESSION_COOKIE_NAME"] || "send_invoice_session"
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
     end

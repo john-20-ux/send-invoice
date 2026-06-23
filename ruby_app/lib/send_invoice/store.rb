@@ -58,6 +58,14 @@ module SendInvoice
       end
     end
 
+    def syncable_shops
+      @database.with_connection do |db|
+        db.execute("SELECT * FROM shops WHERE access_token IS NOT NULL AND access_token != '' ORDER BY installed_at ASC").map do |row|
+          hydrate_shop(row)
+        end
+      end
+    end
+
     def update_shop(shop_domain, attributes)
       return if attributes.nil? || attributes.empty?
 
@@ -94,15 +102,16 @@ module SendInvoice
           normalized = order_to_row(order)
           db.execute(<<~SQL, normalized)
             INSERT INTO orders (
-              id, shop_domain, name, created_at, fully_paid, financial_status, fulfillment_status,
+              id, shop_domain, name, created_at, updated_at, fully_paid, financial_status, fulfillment_status,
               total_price_amount, total_price_currency, total_discounts_amount, total_refunded_amount,
               total_shipping_amount, total_tax_amount, total_tip_amount, total_weight,
               customer_id, customer_first_name, customer_last_name, customer_email, customer_phone,
               line_items, transactions, raw_data, synced_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id, shop_domain) DO UPDATE SET
               name = excluded.name,
               created_at = excluded.created_at,
+              updated_at = excluded.updated_at,
               fully_paid = excluded.fully_paid,
               financial_status = excluded.financial_status,
               fulfillment_status = excluded.fulfillment_status,
@@ -229,16 +238,51 @@ module SendInvoice
 
     def latest_sync_log(shop_domain)
       @database.with_connection do |db|
-        row = db.get_first_row("SELECT * FROM sync_logs WHERE shop_domain = ? ORDER BY started_at DESC LIMIT 1", shop_domain)
+        row = db.get_first_row("SELECT * FROM sync_logs WHERE shop_domain = ? ORDER BY started_at DESC, rowid DESC LIMIT 1", shop_domain)
         hydrate_sync_log(row)
       end
     end
 
     def last_completed_sync(shop_domain)
       @database.with_connection do |db|
-        row = db.get_first_row("SELECT * FROM sync_logs WHERE shop_domain = ? AND status = 'completed' ORDER BY finished_at DESC LIMIT 1", shop_domain)
+        row = db.get_first_row("SELECT * FROM sync_logs WHERE shop_domain = ? AND status = 'completed' ORDER BY finished_at DESC, rowid DESC LIMIT 1", shop_domain)
         hydrate_sync_log(row)
       end
+    end
+
+    def sync_state(shop_domain)
+      @database.with_connection do |db|
+        row = db.get_first_row("SELECT * FROM sync_states WHERE shop_domain = ?", shop_domain)
+        hydrate_sync_state(row)
+      end
+    end
+
+    def upsert_sync_state(shop_domain, attributes)
+      now = Time.now.utc.iso8601
+      payload = {
+        "shop_domain" => shop_domain,
+        "last_order_updated_at" => attributes["last_order_updated_at"] || attributes[:last_order_updated_at],
+        "last_cursor" => attributes["last_cursor"] || attributes[:last_cursor],
+        "last_sync_type" => attributes["last_sync_type"] || attributes[:last_sync_type],
+        "last_synced_at" => attributes["last_synced_at"] || attributes[:last_synced_at] || now,
+        "updated_at" => now
+      }
+
+      @database.with_connection do |db|
+        db.execute(<<~SQL, payload.values_at("shop_domain", "last_order_updated_at", "last_cursor", "last_sync_type", "last_synced_at", "updated_at"))
+          INSERT INTO sync_states (
+            shop_domain, last_order_updated_at, last_cursor, last_sync_type, last_synced_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(shop_domain) DO UPDATE SET
+            last_order_updated_at = excluded.last_order_updated_at,
+            last_cursor = excluded.last_cursor,
+            last_sync_type = excluded.last_sync_type,
+            last_synced_at = excluded.last_synced_at,
+            updated_at = excluded.updated_at
+        SQL
+      end
+
+      sync_state(shop_domain)
     end
 
     def load_session(session_id)
@@ -314,6 +358,7 @@ module SendInvoice
         "shop_domain" => row["shop_domain"],
         "name" => row["name"],
         "created_at" => row["created_at"],
+        "updated_at" => row["updated_at"],
         "fully_paid" => row["fully_paid"].to_i == 1,
         "financial_status" => row["financial_status"],
         "fulfillment_status" => row["fulfillment_status"],
@@ -352,12 +397,26 @@ module SendInvoice
       }
     end
 
+    def hydrate_sync_state(row)
+      return nil unless row
+
+      {
+        "shop_domain" => row["shop_domain"],
+        "last_order_updated_at" => row["last_order_updated_at"],
+        "last_cursor" => row["last_cursor"],
+        "last_sync_type" => row["last_sync_type"],
+        "last_synced_at" => row["last_synced_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
     def order_to_row(order)
       [
         order["id"],
         order["shop_domain"],
         order["name"],
         order["created_at"],
+        order["updated_at"],
         truthy_db(order["fully_paid"]),
         order["financial_status"],
         order["fulfillment_status"],

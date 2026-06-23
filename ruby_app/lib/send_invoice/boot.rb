@@ -27,6 +27,7 @@ module SendInvoice
 
       shopify_client = ShopifyClient.new(config)
       sync_engine = SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
+      sync_engine.start_scheduler
       application = App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
 
       server = WEBrick::HTTPServer.new(
