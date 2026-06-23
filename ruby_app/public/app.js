@@ -125,9 +125,17 @@
 
         if (meta) {
           if (status.status === "running") {
-            meta.textContent = "Syncing " + synced + " of " + total + " orders";
+            if (status.firstTimeSyncStatus === "initial_sync_pending") {
+              meta.textContent = "Loading the latest 3 days of orders first.";
+            } else {
+              meta.textContent = "Syncing " + synced + " of " + total + " orders";
+            }
           } else if (status.status === "completed") {
-            meta.textContent = "Sync complete. Redirecting to your dashboard.";
+            if (status.fullSixMonthsSyncCompleted === false) {
+              meta.textContent = "Recent orders are ready. Older orders will continue syncing in the background.";
+            } else {
+              meta.textContent = "Sync complete. Redirecting to your dashboard.";
+            }
           } else if (status.status === "failed") {
             meta.textContent = "Something went wrong while syncing your store.";
           } else {
@@ -162,7 +170,7 @@
         await requestJson(shell.dataset.apiPath, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "full" })
+          body: JSON.stringify({ type: "first_time" })
         });
       } catch (_error) {
         // Ignore initial trigger failures; polling will show the latest state.

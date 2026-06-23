@@ -113,6 +113,34 @@ module SendInvoice
           CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_shop_started ON bulk_sync_jobs(shop_domain, started_at DESC);
           CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_operation ON bulk_sync_jobs(shopify_bulk_operation_id);
 
+          CREATE TABLE IF NOT EXISTS batch_logs (
+            id TEXT PRIMARY KEY,
+            shop_domain TEXT NOT NULL,
+            resource_name TEXT NOT NULL,
+            sync_type TEXT NOT NULL,
+            batch_type TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            order_count INTEGER NOT NULL DEFAULT 0,
+            batch_sequence INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            cursor TEXT,
+            page_index INTEGER NOT NULL DEFAULT 0,
+            page_limit INTEGER NOT NULL DEFAULT 1000,
+            error_message TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(shop_domain, sync_type, batch_type, start_date, end_date, page_index),
+            FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_batch_logs_shop_status ON batch_logs(shop_domain, status, priority, batch_sequence);
+          CREATE INDEX IF NOT EXISTS idx_batch_logs_shop_created ON batch_logs(shop_domain, created_at DESC);
+
           CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             shop_domain TEXT,

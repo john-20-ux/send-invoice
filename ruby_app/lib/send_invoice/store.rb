@@ -371,6 +371,136 @@ module SendInvoice
       end
     end
 
+    def create_batch_log(shop_domain, attributes)
+      now = Time.now.utc.iso8601
+      payload = {
+        "id" => SecureRandom.uuid,
+        "shop_domain" => shop_domain,
+        "resource_name" => attributes["resource_name"] || attributes[:resource_name] || "ORDER",
+        "sync_type" => attributes["sync_type"] || attributes[:sync_type] || "first_time_sync",
+        "batch_type" => attributes["batch_type"] || attributes[:batch_type],
+        "start_date" => attributes["start_date"] || attributes[:start_date],
+        "end_date" => attributes["end_date"] || attributes[:end_date],
+        "order_count" => (attributes["order_count"] || attributes[:order_count] || 0).to_i,
+        "batch_sequence" => (attributes["batch_sequence"] || attributes[:batch_sequence] || 0).to_i,
+        "status" => attributes["status"] || attributes[:status] || "pending",
+        "priority" => attributes["priority"] || attributes[:priority] || "normal",
+        "retry_count" => (attributes["retry_count"] || attributes[:retry_count] || 0).to_i,
+        "cursor" => attributes["cursor"] || attributes[:cursor],
+        "page_index" => (attributes["page_index"] || attributes[:page_index] || 0).to_i,
+        "page_limit" => (attributes["page_limit"] || attributes[:page_limit] || 1000).to_i,
+        "error_message" => attributes["error_message"] || attributes[:error_message],
+        "started_at" => attributes["started_at"] || attributes[:started_at],
+        "completed_at" => attributes["completed_at"] || attributes[:completed_at],
+        "created_at" => now,
+        "updated_at" => now
+      }
+
+      values = payload.values_at(
+        "id", "shop_domain", "resource_name", "sync_type", "batch_type", "start_date", "end_date",
+        "order_count", "batch_sequence", "status", "priority", "retry_count", "cursor",
+        "page_index", "page_limit", "error_message", "started_at", "completed_at", "created_at", "updated_at"
+      )
+
+      @database.with_connection do |db|
+        db.execute(<<~SQL, values)
+          INSERT OR IGNORE INTO batch_logs (
+            id, shop_domain, resource_name, sync_type, batch_type, start_date, end_date,
+            order_count, batch_sequence, status, priority, retry_count, cursor,
+            page_index, page_limit, error_message, started_at, completed_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SQL
+      end
+
+      batch_log_by_unique(
+        shop_domain,
+        payload["sync_type"],
+        payload["batch_type"],
+        payload["start_date"],
+        payload["end_date"],
+        payload["page_index"]
+      )
+    end
+
+    def update_batch_log(batch_id, attributes)
+      normalized = normalize_keys(attributes)
+      allowed = %w[
+        status order_count retry_count cursor page_limit error_message started_at completed_at
+      ]
+      updates = []
+      values = []
+
+      normalized.each do |key, value|
+        next unless allowed.include?(key)
+
+        updates << "#{key} = ?"
+        values << value
+      end
+
+      updates << "updated_at = ?"
+      values << Time.now.utc.iso8601
+      values << batch_id
+
+      @database.with_connection do |db|
+        db.execute("UPDATE batch_logs SET #{updates.join(', ')} WHERE id = ?", values)
+      end
+
+      batch_log(batch_id)
+    end
+
+    def batch_log(batch_id)
+      @database.with_connection do |db|
+        hydrate_batch_log(db.get_first_row("SELECT * FROM batch_logs WHERE id = ?", batch_id))
+      end
+    end
+
+    def batch_log_by_unique(shop_domain, sync_type, batch_type, start_date, end_date, page_index)
+      @database.with_connection do |db|
+        row = db.get_first_row(<<~SQL, [shop_domain, sync_type, batch_type, start_date, end_date, page_index])
+          SELECT * FROM batch_logs
+          WHERE shop_domain = ? AND sync_type = ? AND batch_type = ? AND start_date = ? AND end_date = ? AND page_index = ?
+        SQL
+        hydrate_batch_log(row)
+      end
+    end
+
+    def pending_batch_logs(shop_domain, sync_type: "first_time_sync")
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [shop_domain, sync_type]).map { |row| hydrate_batch_log(row) }
+          SELECT * FROM batch_logs
+          WHERE shop_domain = ? AND sync_type = ? AND status IN ('pending', 'failed')
+          ORDER BY CASE priority WHEN 'high' THEN 0 ELSE 1 END, batch_sequence ASC, page_index ASC
+        SQL
+      end
+    end
+
+    def batch_logs(shop_domain, sync_type: "first_time_sync")
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [shop_domain, sync_type]).map { |row| hydrate_batch_log(row) }
+          SELECT * FROM batch_logs
+          WHERE shop_domain = ? AND sync_type = ?
+          ORDER BY batch_sequence ASC, page_index ASC
+        SQL
+      end
+    end
+
+    def batch_summary(shop_domain, sync_type: "first_time_sync")
+      rows = batch_logs(shop_domain, sync_type: sync_type)
+      grouped = rows.group_by { |batch| batch["batch_type"] }
+      {
+        "status" => first_time_sync_status(rows),
+        "totalBatches" => rows.length,
+        "completedBatches" => rows.count { |batch| batch["status"] == "completed" },
+        "failedBatches" => rows.count { |batch| batch["status"] == "failed" },
+        "pendingBatches" => rows.count { |batch| batch["status"] == "pending" },
+        "processingBatches" => rows.count { |batch| batch["status"] == "processing" },
+        "initialSyncCompleted" => Array(grouped["initial_3_days"]).all? { |batch| batch["status"] == "completed" },
+        "remainingSyncCompleted" => Array(grouped["remaining_6_months"]).all? { |batch| batch["status"] == "completed" },
+        "fullSixMonthsSyncCompleted" => rows.any? && rows.all? { |batch| batch["status"] == "completed" },
+        "batches" => rows
+      }
+    end
+
     def load_session(session_id)
       @database.with_connection do |db|
         row = db.get_first_row("SELECT * FROM sessions WHERE id = ?", session_id)
@@ -519,6 +649,48 @@ module SendInvoice
         "completed_at" => row["completed_at"],
         "updated_at" => row["updated_at"]
       }
+    end
+
+    def hydrate_batch_log(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => row["shop_domain"],
+        "resource_name" => row["resource_name"],
+        "sync_type" => row["sync_type"],
+        "batch_type" => row["batch_type"],
+        "start_date" => row["start_date"],
+        "end_date" => row["end_date"],
+        "order_count" => row["order_count"].to_i,
+        "batch_sequence" => row["batch_sequence"].to_i,
+        "status" => row["status"],
+        "priority" => row["priority"],
+        "retry_count" => row["retry_count"].to_i,
+        "cursor" => row["cursor"],
+        "page_index" => row["page_index"].to_i,
+        "page_limit" => row["page_limit"].to_i,
+        "error_message" => row["error_message"],
+        "started_at" => row["started_at"],
+        "completed_at" => row["completed_at"],
+        "created_at" => row["created_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def first_time_sync_status(rows)
+      return "not_planned" if rows.empty?
+      return "failed" if rows.any? { |batch| batch["status"] == "failed" }
+      return "full_6_months_sync_completed" if rows.all? { |batch| batch["status"] == "completed" }
+
+      initial = rows.select { |batch| batch["batch_type"] == "initial_3_days" }
+      remaining = rows.reject { |batch| batch["batch_type"] == "initial_3_days" }
+      return "initial_sync_pending" if initial.any? { |batch| batch["status"] == "pending" }
+      return "initial_sync_completed" if initial.all? { |batch| batch["status"] == "completed" } && remaining.any? { |batch| batch["status"] == "pending" }
+      return "remaining_sync_in_progress" if remaining.any? { |batch| batch["status"] == "processing" }
+      return "remaining_sync_pending" if remaining.any? { |batch| batch["status"] == "pending" }
+
+      "processing"
     end
 
     def order_to_row(order)

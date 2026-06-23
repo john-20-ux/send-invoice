@@ -144,6 +144,76 @@ class SendInvoiceAppTest < Minitest::Test
     ENV.delete("MOCK_MODE")
   end
 
+  def test_first_time_sync_creates_initial_and_remaining_batches
+    store, sync_engine, _shopify_client, database_path = build_real_sync_engine(FakeBatchShopifyClient.new)
+    shop = store.shop("sync-test.myshopify.com")
+
+    result = sync_engine.trigger_first_time(shop: shop)
+    assert_equal true, result["started"]
+
+    wait_for_batch_summary(store, shop["shop_domain"], "full_6_months_sync_completed")
+    batches = store.batch_logs(shop["shop_domain"])
+    initial_batches = batches.select { |batch| batch["batch_type"] == "initial_3_days" }
+    remaining_batches = batches.select { |batch| batch["batch_type"] == "remaining_6_months" }
+
+    refute_empty initial_batches
+    refute_empty remaining_batches
+    assert initial_batches.all? { |batch| batch["priority"] == "high" }
+    assert remaining_batches.all? { |batch| batch["priority"] == "normal" }
+    assert batches.all? { |batch| batch["order_count"] <= 1000 }
+    assert batches.all? { |batch| batch["status"] == "completed" }
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV.delete("MOCK_MODE")
+  end
+
+  def test_first_time_sync_splits_single_day_over_one_thousand_orders
+    store, sync_engine, _shopify_client, database_path = build_real_sync_engine(FakeHighVolumeDayShopifyClient.new)
+    shop = store.shop("sync-test.myshopify.com")
+
+    result = sync_engine.trigger_first_time(shop: shop)
+    assert_equal true, result["started"]
+
+    wait_for_batch_summary(store, shop["shop_domain"], "full_6_months_sync_completed")
+    split_batches = store.batch_logs(shop["shop_domain"]).select { |batch| batch["batch_type"] == "single_day_split" }
+
+    assert_equal 4, split_batches.length
+    assert_equal [1000, 1000, 1000, 200], split_batches.map { |batch| batch["order_count"] }
+    assert split_batches.all? { |batch| batch["status"] == "completed" }
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV.delete("MOCK_MODE")
+  end
+
+  def test_mock_first_time_sync_uses_batch_logs_and_imports_recent_mock_orders
+    store, sync_engine, database_path = build_mock_sync_engine
+    shop = store.shop(SendInvoice::MockData::DEMO_SHOP_DOMAIN)
+
+    result = sync_engine.trigger_first_time(shop: shop)
+    assert_equal true, result["started"]
+
+    wait_for_batch_summary(store, shop["shop_domain"], "full_6_months_sync_completed")
+    batches = store.batch_logs(shop["shop_domain"])
+    orders = store.orders(shop["shop_domain"], limit: 200)["orders"]
+    planned_order_count = batches.sum { |batch| batch["order_count"] }
+
+    refute_empty batches
+    assert batches.any? { |batch| batch["batch_type"] == "initial_3_days" && batch["priority"] == "high" }
+    assert batches.any? { |batch| batch["batch_type"] == "remaining_6_months" && batch["priority"] == "normal" }
+    assert batches.all? { |batch| batch["order_count"] <= 1000 }
+    assert_equal planned_order_count, orders.length
+    assert_equal "completed", store.latest_sync_log(shop["shop_domain"])["status"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV.delete("MOCK_MODE")
+  end
+
   private
 
   class FakeShopifyClient
@@ -296,6 +366,38 @@ class SendInvoiceAppTest < Minitest::Test
     end
   end
 
+  class FakeBatchShopifyClient < FakeShopifyClient
+    def order_count(_shop_domain, _access_token, query)
+      start_time, = extract_created_range(query)
+      offset = (Date.today - start_time.to_date).to_i
+      {
+        0 => 150,
+        1 => 200,
+        2 => 300,
+        4 => 250,
+        5 => 220,
+        6 => 180
+      }.fetch(offset, 0)
+    end
+
+    private
+
+    def extract_created_range(query)
+      [
+        Time.parse(query[/created_at:>=([^ ]+)/, 1]),
+        Time.parse(query[/created_at:<([^ ]+)/, 1])
+      ]
+    end
+  end
+
+  class FakeHighVolumeDayShopifyClient < FakeBatchShopifyClient
+    def order_count(_shop_domain, _access_token, query)
+      start_time, = send(:extract_created_range, query)
+      offset = (Date.today - start_time.to_date).to_i
+      offset.zero? ? 3200 : 0
+    end
+  end
+
   def build_app(onboarded:, order_count:)
     database_path = File.join(Dir.tmpdir, "send_invoice_test_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
     root = File.expand_path("../..", __dir__)
@@ -344,6 +446,28 @@ class SendInvoiceAppTest < Minitest::Test
     [store, sync_engine, shopify_client, database_path]
   end
 
+  def build_mock_sync_engine
+    database_path = File.join(Dir.tmpdir, "send_invoice_mock_sync_test_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
+    root = File.expand_path("../..", __dir__)
+    ENV["DATABASE_PATH"] = database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV["MOCK_MODE"] = "true"
+
+    config = SendInvoice::Configuration.load(root: root)
+    database = SendInvoice::Database.new(config)
+    SendInvoice::Migrator.new(database).run
+    store = SendInvoice::Store.new(database)
+    store.ensure_shop(SendInvoice::MockData::DEMO_SHOP_DOMAIN, {
+      "shop_name" => SendInvoice::MockData::DEMO_SHOP_NAME,
+      "onboarded" => true
+    })
+    shopify_client = SendInvoice::ShopifyClient.new(config)
+    sync_engine = SendInvoice::SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
+
+    [store, sync_engine, database_path]
+  end
+
   def wait_for_sync(store, shop_domain)
     40.times do
       latest = store.latest_sync_log(shop_domain)
@@ -365,6 +489,17 @@ class SendInvoiceAppTest < Minitest::Test
     end
 
     flunk "Timed out waiting for bulk sync to finish"
+  end
+
+  def wait_for_batch_summary(store, shop_domain, status)
+    100.times do
+      summary = store.batch_summary(shop_domain)
+      return summary if summary["status"] == status
+
+      sleep 0.05
+    end
+
+    flunk "Timed out waiting for batch sync status #{status}"
   end
 
   def perform(app, method, path, query = {}, cookies = [])

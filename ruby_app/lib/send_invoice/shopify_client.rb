@@ -112,6 +112,19 @@ module SendInvoice
       data.fetch("bulkOperation")
     end
 
+    def order_count(shop, access_token, query)
+      data = graph_ql(shop, access_token, <<~GRAPHQL, { "query" => query })
+        query OrderCount($query: String) {
+          ordersCount(query: $query, limit: null) {
+            count
+            precision
+          }
+        }
+      GRAPHQL
+
+      data.fetch("ordersCount").fetch("count").to_i
+    end
+
     def stream_bulk_result(url)
       uri = URI(url)
       buffer = +""

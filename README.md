@@ -74,11 +74,16 @@ The Ruby app stores shops, orders, sync logs, and UI settings in SQLite at `ruby
 
 The app syncs real Shopify order data through the Admin GraphQL API:
 
-- Initial sync pulls orders with the `orders` GraphQL query and stores normalized order fields plus the raw Shopify payload in SQLite.
+- First install sync plans only the last 6 months of orders by default.
+- The first high-priority install batch covers the latest 3 days so merchants can see recent data quickly.
+- Remaining 6-month history is split into newest-to-oldest `batch_logs` using Shopify `ordersCount`; each batch is capped at 1000 orders.
+- If one day has more than 1000 orders, that day is split into multiple `single_day_split` batches with page indexes and 1000-order limits.
+- Initial install batches run before normal-priority remaining batches; remaining history continues in the background after recent data is ready.
+- Batch status is available at `GET /api/sync/batches/status`.
+- Bulk full sync is available at `POST /api/sync/bulk` and is intended for large historical backfills and forced full re-syncs.
 - Incremental sync uses Shopify `updated_at` filtering, so refunds, fulfillment changes, payment status changes, and customer/order edits are picked up after the first import.
 - Sync checkpoints are stored in SQLite in `sync_states`; progress and failures are stored in `sync_logs`.
 - Manual sync is available from the Orders screen and `POST /api/sync`.
-- Bulk full sync is available at `POST /api/sync/bulk` and is intended for first install, large historical backfills, and forced full re-syncs.
 - If a bulk sync fails for a recoverable Shopify/API/import error, the app automatically falls back once to the existing paginated GraphQL full sync.
 
 To enable in-process automated sync for every installed shop with an access token:

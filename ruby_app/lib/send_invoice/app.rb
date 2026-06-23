@@ -166,6 +166,8 @@ module SendInvoice
         api_sync_all
       when ["GET", "/api/sync/status"]
         api_sync_status
+      when ["GET", "/api/sync/batches/status"]
+        api_batch_sync_status
       else
         return api_order_detail if @request.request_method == "GET" && @request.path.start_with?("/api/orders/")
         return render_vendor_invoice if @request.request_method == "GET" && @request.path.start_with?("/vendors/")
@@ -607,8 +609,12 @@ module SendInvoice
     def api_sync
       shop = require_shop
       payload = request_payload
-      type = payload["type"].to_s == "full" ? "full" : "incremental"
-      respond_json(@sync_engine.trigger(shop: shop, type: type))
+      type = payload["type"].to_s
+      if type == "first_time"
+        respond_json(@sync_engine.trigger_first_time(shop: shop))
+      else
+        respond_json(@sync_engine.trigger(shop: shop, type: type == "full" ? "full" : "incremental"))
+      end
     end
 
     def api_bulk_sync
@@ -637,6 +643,11 @@ module SendInvoice
     def api_sync_status
       shop = require_shop
       respond_json(@sync_engine.status(shop["shop_domain"]))
+    end
+
+    def api_batch_sync_status
+      shop = require_shop
+      respond_json(@sync_engine.batch_status(shop["shop_domain"]))
     end
 
     def render_page(page, locals, status: 200, layout: "application")

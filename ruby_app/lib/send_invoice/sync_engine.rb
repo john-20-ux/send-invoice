@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "date"
 require "thread"
 require "time"
 
@@ -8,6 +9,9 @@ module SendInvoice
   class SyncEngine
     RATE_LIMIT_SECONDS = 300
     BULK_POLL_SECONDS = 5
+    FIRST_TIME_MONTHS = 6
+    INITIAL_SYNC_DAYS = 3
+    MAX_BATCH_ORDERS = 1_000
 
     ORDERS_QUERY = <<~GRAPHQL
       query SyncOrders($cursor: String, $query: String) {
@@ -192,6 +196,28 @@ module SendInvoice
       { "started" => true, "syncLogId" => sync_log["id"], "bulkJobId" => job["id"], "mode" => "bulk" }
     end
 
+    def trigger_first_time(shop:)
+      shop_domain = shop.fetch("shop_domain")
+      summary = @store.batch_summary(shop_domain)
+
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+
+      sync_log = @store.create_sync_log(shop_domain, total_estimated: 0)
+
+      Thread.new do
+        Thread.current.abort_on_exception = false
+        begin
+          plan_first_time_sync_batches(shop) if summary["totalBatches"].zero?
+          process_first_time_batches(shop, sync_log["id"])
+          @store.complete_sync_log(sync_log["id"], total_estimated: @store.batch_summary(shop_domain)["completedBatches"])
+        rescue StandardError => e
+          @store.fail_sync_log(sync_log["id"], e.message)
+        end
+      end
+
+      { "started" => true, "syncLogId" => sync_log["id"], "mode" => "first_time" }
+    end
+
     def trigger_all(type: "incremental", skip_rate_limit: false)
       shops = if @config.mock_mode?
                 [@store.ensure_shop(MockData::DEMO_SHOP_DOMAIN, "shop_name" => MockData::DEMO_SHOP_NAME)]
@@ -230,17 +256,26 @@ module SendInvoice
     def status(shop_domain)
       latest = @store.latest_sync_log(shop_domain)
       last_completed = @store.last_completed_sync(shop_domain)
+      batch_summary = sync_status_batch_summary(shop_domain)
 
       return idle_status unless latest
 
-      {
-        "status" => latest["status"],
-        "ordersSynced" => latest["orders_synced"],
-        "totalEstimated" => latest["total_estimated"],
-        "startedAt" => latest["started_at"],
-        "finishedAt" => latest["finished_at"],
-        "lastSyncedAt" => last_completed && last_completed["finished_at"]
-      }
+      if batch_summary["totalBatches"].positive? && !batch_summary["initialSyncCompleted"]
+        return sync_status_payload(latest, last_completed).merge(batch_summary)
+      end
+
+      if batch_summary["totalBatches"].positive? && batch_summary["initialSyncCompleted"] && !batch_summary["remainingSyncCompleted"]
+        return sync_status_payload(latest, last_completed).merge(batch_summary).merge(
+          "status" => "completed",
+          "lastSyncedAt" => Time.now.utc.iso8601
+        )
+      end
+
+      sync_status_payload(latest, last_completed).merge(batch_summary)
+    end
+
+    def batch_status(shop_domain)
+      @store.batch_summary(shop_domain)
     end
 
     def bulk_status(shop_domain)
@@ -252,6 +287,23 @@ module SendInvoice
 
     private
 
+    def sync_status_payload(latest, last_completed)
+      {
+        "status" => latest["status"],
+        "ordersSynced" => latest["orders_synced"],
+        "totalEstimated" => latest["total_estimated"],
+        "startedAt" => latest["started_at"],
+        "finishedAt" => latest["finished_at"],
+        "lastSyncedAt" => last_completed && last_completed["finished_at"]
+      }
+    end
+
+    def sync_status_batch_summary(shop_domain)
+      summary = @store.batch_summary(shop_domain)
+      first_time_status = summary.delete("status")
+      summary.merge("firstTimeSyncStatus" => first_time_status)
+    end
+
     def idle_status
       {
         "status" => "idle",
@@ -261,6 +313,159 @@ module SendInvoice
         "finishedAt" => nil,
         "lastSyncedAt" => nil
       }
+    end
+
+    def plan_first_time_sync_batches(shop)
+      shop_domain = shop.fetch("shop_domain")
+      sync_end_date = Time.now.utc
+      sync_start_date = shift_months(sync_end_date, -FIRST_TIME_MONTHS)
+      initial_start_date = [sync_end_date - (INITIAL_SYNC_DAYS * 86_400), sync_start_date].max
+      sequence = 1
+
+      sequence = create_order_based_batches(
+        shop: shop,
+        start_time: initial_start_date,
+        end_time: sync_end_date,
+        batch_type: "initial_3_days",
+        priority: "high",
+        sequence: sequence
+      )
+
+      create_order_based_batches(
+        shop: shop,
+        start_time: sync_start_date,
+        end_time: initial_start_date,
+        batch_type: "remaining_6_months",
+        priority: "normal",
+        sequence: sequence
+      )
+
+      @store.batch_summary(shop_domain)
+    end
+
+    def create_order_based_batches(shop:, start_time:, end_time:, batch_type:, priority:, sequence:)
+      current_end = end_time.utc
+
+      while current_end > start_time
+        day_end = [end_of_day(current_end), end_time].min
+        day_start = [start_of_day(current_end), start_time].max
+        day_count = count_orders(shop, day_start, day_end)
+
+        if day_count > MAX_BATCH_ORDERS
+          pages = (day_count.to_f / MAX_BATCH_ORDERS).ceil
+          pages.times do |page_index|
+            create_batch(shop, day_start, day_end, "single_day_split", priority, sequence, [MAX_BATCH_ORDERS, day_count - (page_index * MAX_BATCH_ORDERS)].min, page_index)
+            sequence += 1
+          end
+          current_end = day_start - 1
+          next
+        end
+
+        batch_start = day_start
+        batch_count = day_count
+        scan_day = day_start - 1
+
+        while scan_day > start_time
+          candidate_start = [start_of_day(scan_day), start_time].max
+          candidate_end = [end_of_day(scan_day), day_start - 1].min
+          candidate_count = count_orders(shop, candidate_start, candidate_end)
+          break if batch_count.positive? && batch_count + candidate_count > MAX_BATCH_ORDERS
+
+          batch_start = candidate_start
+          batch_count += candidate_count
+          scan_day = candidate_start - 1
+        end
+
+        create_batch(shop, batch_start, day_end, batch_type, priority, sequence, batch_count, 0)
+        sequence += 1
+        current_end = batch_start - 1
+      end
+
+      sequence
+    end
+
+    def create_batch(shop, start_time, end_time, batch_type, priority, sequence, order_count, page_index)
+      @store.create_batch_log(shop.fetch("shop_domain"), {
+        "resource_name" => "ORDER",
+        "sync_type" => "first_time_sync",
+        "batch_type" => batch_type,
+        "start_date" => start_time.utc.iso8601,
+        "end_date" => end_time.utc.iso8601,
+        "order_count" => order_count,
+        "batch_sequence" => sequence,
+        "status" => "pending",
+        "priority" => priority,
+        "page_index" => page_index,
+        "page_limit" => MAX_BATCH_ORDERS
+      })
+    end
+
+    def process_first_time_batches(shop, sync_log_id)
+      loop do
+        batch = @store.pending_batch_logs(shop.fetch("shop_domain")).first
+        break unless batch
+
+        process_batch(shop, batch, sync_log_id)
+      end
+    end
+
+    def process_batch(shop, batch, sync_log_id)
+      @store.update_batch_log(batch["id"], {
+        "status" => "processing",
+        "started_at" => Time.now.utc.iso8601,
+        "error_message" => nil
+      })
+
+      query_filter = created_at_query(Time.parse(batch["start_date"]), Time.parse(batch["end_date"]))
+      sync_orders_for_query(
+        sync_log_id,
+        shop,
+        query_filter,
+        "first_time_sync",
+        max_orders: batch["page_limit"],
+        skip_orders: batch["page_index"] * batch["page_limit"]
+      )
+
+      @store.update_batch_log(batch["id"], {
+        "status" => "completed",
+        "completed_at" => Time.now.utc.iso8601
+      })
+    rescue StandardError => e
+      @store.update_batch_log(batch["id"], {
+        "status" => "failed",
+        "retry_count" => batch["retry_count"] + 1,
+        "error_message" => e.message
+      })
+      raise
+    end
+
+    def count_orders(shop, start_time, end_time)
+      if @config.mock_mode?
+        MockData.orders.count do |order|
+          created_at = Time.parse(order["created_at"])
+          created_at >= start_time && created_at < end_time
+        end
+      else
+        @shopify_client.order_count(shop.fetch("shop_domain"), shop.fetch("access_token"), created_at_query(start_time, end_time))
+      end
+    end
+
+    def created_at_query(start_time, end_time)
+      "created_at:>=#{start_time.utc.iso8601} created_at:<#{end_time.utc.iso8601}"
+    end
+
+    def start_of_day(time)
+      Time.utc(time.year, time.month, time.day)
+    end
+
+    def end_of_day(time)
+      start_of_day(time) + 86_400
+    end
+
+    def shift_months(time, months)
+      base = Date.new(time.year, time.month, time.day)
+      date = months.negative? ? (base << months.abs) : (base >> months)
+      Time.utc(date.year, date.month, date.day, time.hour, time.min, time.sec)
     end
 
     def rate_limited_for(shop_domain)
@@ -327,11 +532,30 @@ module SendInvoice
     end
 
     def run_shopify_sync(sync_log_id, shop, last_order_updated_at = nil, sync_type = "incremental")
-      cursor = nil
-      synced = 0
-      total_estimated = 0
       highest_order_updated_at = last_order_updated_at
       query_filter = sync_type == "incremental" && last_order_updated_at ? "updated_at:>=#{last_order_updated_at}" : nil
+      result = sync_orders_for_query(sync_log_id, shop, query_filter, sync_type)
+      highest_order_updated_at = [highest_order_updated_at, result["last_order_updated_at"]].compact.max
+
+      @store.complete_sync_log(sync_log_id, total_estimated: result["synced"])
+      @store.upsert_sync_state(shop.fetch("shop_domain"), {
+        "last_order_updated_at" => highest_order_updated_at,
+        "last_cursor" => nil,
+        "last_sync_type" => sync_type
+      })
+    rescue StandardError => e
+      @store.fail_sync_log(sync_log_id, e.message)
+      raise
+    end
+
+    def sync_orders_for_query(sync_log_id, shop, query_filter, sync_type, max_orders: nil, skip_orders: 0)
+      return sync_mock_orders_for_query(sync_log_id, shop, query_filter, sync_type, max_orders: max_orders, skip_orders: skip_orders) if @config.mock_mode?
+
+      cursor = nil
+      seen = 0
+      synced = 0
+      total_estimated = 0
+      highest_order_updated_at = nil
 
       loop do
         data = @shopify_client.graph_ql(shop.fetch("shop_domain"), shop.fetch("access_token"), ORDERS_QUERY, {
@@ -343,9 +567,23 @@ module SendInvoice
         page_info = data.fetch("orders", {}).fetch("pageInfo", {})
 
         unless edges.empty?
-          orders = edges.map do |edge|
-            map_order_node(edge.fetch("node"), shop.fetch("shop_domain"))
+          nodes = edges.map { |edge| edge.fetch("node") }
+
+          if skip_orders.positive? && seen + nodes.length <= skip_orders
+            seen += nodes.length
+            cursor = page_info["endCursor"]
+            break unless page_info["hasNextPage"]
+
+            next
+          elsif skip_orders.positive? && seen < skip_orders
+            nodes = nodes.drop(skip_orders - seen)
+            seen = skip_orders
           end
+
+          remaining = max_orders ? max_orders - synced : nodes.length
+          nodes = nodes.first(remaining) if max_orders
+
+          orders = nodes.map { |node| map_order_node(node, shop.fetch("shop_domain")) }
           @store.upsert_orders(orders)
           highest_order_updated_at = [highest_order_updated_at, max_order_updated_at(orders)].compact.max
           synced += orders.length
@@ -353,20 +591,55 @@ module SendInvoice
           @store.update_sync_log_progress(sync_log_id, synced, total_estimated)
         end
 
+        break if max_orders && synced >= max_orders
         break unless page_info["hasNextPage"]
 
         cursor = page_info["endCursor"]
       end
 
-      @store.complete_sync_log(sync_log_id, total_estimated: total_estimated)
-      @store.upsert_sync_state(shop.fetch("shop_domain"), {
-        "last_order_updated_at" => highest_order_updated_at,
-        "last_cursor" => nil,
-        "last_sync_type" => sync_type
-      })
-    rescue StandardError => e
-      @store.fail_sync_log(sync_log_id, e.message)
-      raise
+      { "synced" => synced, "last_order_updated_at" => highest_order_updated_at }
+    end
+
+    def sync_mock_orders_for_query(sync_log_id, shop, query_filter, _sync_type, max_orders: nil, skip_orders: 0)
+      orders = filtered_mock_orders_for_query(query_filter)
+      orders = orders.drop(skip_orders)
+      orders = orders.first(max_orders) if max_orders
+      orders = orders.map do |order|
+        order.merge(
+          "shop_domain" => shop.fetch("shop_domain"),
+          "updated_at" => order["updated_at"] || order["created_at"],
+          "synced_at" => Time.now.utc.iso8601
+        )
+      end
+
+      unless orders.empty?
+        @store.upsert_orders(orders)
+        @store.update_sync_log_progress(sync_log_id, orders.length, orders.length)
+      end
+
+      { "synced" => orders.length, "last_order_updated_at" => max_order_updated_at(orders) }
+    end
+
+    def filtered_mock_orders_for_query(query_filter)
+      orders = MockData.orders
+      return orders unless query_filter
+
+      if (created_start = query_filter[/created_at:>=([^ ]+)/, 1])
+        start_time = Time.parse(created_start)
+        orders = orders.select { |order| Time.parse(order["created_at"]) >= start_time }
+      end
+
+      if (created_end = query_filter[/created_at:<([^ ]+)/, 1])
+        end_time = Time.parse(created_end)
+        orders = orders.select { |order| Time.parse(order["created_at"]) < end_time }
+      end
+
+      if (updated_start = query_filter[/updated_at:>=([^ ]+)/, 1])
+        start_time = Time.parse(updated_start)
+        orders = orders.select { |order| Time.parse(order["updated_at"] || order["created_at"]) >= start_time }
+      end
+
+      orders
     end
 
     def run_bulk_sync(job_id, sync_log_id, shop, sync_type)
