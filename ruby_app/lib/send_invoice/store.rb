@@ -285,6 +285,92 @@ module SendInvoice
       sync_state(shop_domain)
     end
 
+    def create_bulk_sync_job(shop_domain, attributes = {})
+      now = Time.now.utc.iso8601
+      payload = {
+        "id" => SecureRandom.uuid,
+        "shop_domain" => shop_domain,
+        "sync_log_id" => attributes["sync_log_id"] || attributes[:sync_log_id],
+        "shopify_bulk_operation_id" => attributes["shopify_bulk_operation_id"] || attributes[:shopify_bulk_operation_id],
+        "sync_type" => attributes["sync_type"] || attributes[:sync_type] || "full",
+        "status" => attributes["status"] || attributes[:status] || "queued",
+        "object_count" => (attributes["object_count"] || attributes[:object_count] || 0).to_i,
+        "file_size" => (attributes["file_size"] || attributes[:file_size] || 0).to_i,
+        "result_url" => attributes["result_url"] || attributes[:result_url],
+        "partial_data_url" => attributes["partial_data_url"] || attributes[:partial_data_url],
+        "imported_count" => (attributes["imported_count"] || attributes[:imported_count] || 0).to_i,
+        "fallback_used" => truthy_db(attributes["fallback_used"] || attributes[:fallback_used] || false),
+        "fallback_sync_log_id" => attributes["fallback_sync_log_id"] || attributes[:fallback_sync_log_id],
+        "error_code" => attributes["error_code"] || attributes[:error_code],
+        "error_message" => attributes["error_message"] || attributes[:error_message],
+        "started_at" => now,
+        "completed_at" => attributes["completed_at"] || attributes[:completed_at],
+        "updated_at" => now
+      }
+
+      values = payload.values_at(
+        "id", "shop_domain", "sync_log_id", "shopify_bulk_operation_id", "sync_type", "status",
+        "object_count", "file_size", "result_url", "partial_data_url", "imported_count",
+        "fallback_used", "fallback_sync_log_id", "error_code", "error_message",
+        "started_at", "completed_at", "updated_at"
+      )
+
+      @database.with_connection do |db|
+        db.execute(<<~SQL, values)
+          INSERT INTO bulk_sync_jobs (
+            id, shop_domain, sync_log_id, shopify_bulk_operation_id, sync_type, status,
+            object_count, file_size, result_url, partial_data_url, imported_count,
+            fallback_used, fallback_sync_log_id, error_code, error_message,
+            started_at, completed_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SQL
+      end
+
+      bulk_sync_job(payload["id"])
+    end
+
+    def update_bulk_sync_job(job_id, attributes)
+      normalized = normalize_keys(attributes)
+      allowed = %w[
+        sync_log_id shopify_bulk_operation_id status object_count file_size result_url
+        partial_data_url imported_count fallback_used fallback_sync_log_id error_code
+        error_message completed_at
+      ]
+      updates = []
+      values = []
+
+      normalized.each do |key, value|
+        next unless allowed.include?(key)
+
+        updates << "#{key} = ?"
+        values << (key == "fallback_used" ? truthy_db(value) : value)
+      end
+
+      updates << "updated_at = ?"
+      values << Time.now.utc.iso8601
+      values << job_id
+
+      @database.with_connection do |db|
+        db.execute("UPDATE bulk_sync_jobs SET #{updates.join(', ')} WHERE id = ?", values)
+      end
+
+      bulk_sync_job(job_id)
+    end
+
+    def bulk_sync_job(job_id)
+      @database.with_connection do |db|
+        row = db.get_first_row("SELECT * FROM bulk_sync_jobs WHERE id = ?", job_id)
+        hydrate_bulk_sync_job(row)
+      end
+    end
+
+    def latest_bulk_sync_job(shop_domain)
+      @database.with_connection do |db|
+        row = db.get_first_row("SELECT * FROM bulk_sync_jobs WHERE shop_domain = ? ORDER BY started_at DESC, rowid DESC LIMIT 1", shop_domain)
+        hydrate_bulk_sync_job(row)
+      end
+    end
+
     def load_session(session_id)
       @database.with_connection do |db|
         row = db.get_first_row("SELECT * FROM sessions WHERE id = ?", session_id)
@@ -406,6 +492,31 @@ module SendInvoice
         "last_cursor" => row["last_cursor"],
         "last_sync_type" => row["last_sync_type"],
         "last_synced_at" => row["last_synced_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def hydrate_bulk_sync_job(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => row["shop_domain"],
+        "sync_log_id" => row["sync_log_id"],
+        "shopify_bulk_operation_id" => row["shopify_bulk_operation_id"],
+        "sync_type" => row["sync_type"],
+        "status" => row["status"],
+        "object_count" => row["object_count"].to_i,
+        "file_size" => row["file_size"].to_i,
+        "result_url" => row["result_url"],
+        "partial_data_url" => row["partial_data_url"],
+        "imported_count" => row["imported_count"].to_i,
+        "fallback_used" => row["fallback_used"].to_i == 1,
+        "fallback_sync_log_id" => row["fallback_sync_log_id"],
+        "error_code" => row["error_code"],
+        "error_message" => row["error_message"],
+        "started_at" => row["started_at"],
+        "completed_at" => row["completed_at"],
         "updated_at" => row["updated_at"]
       }
     end

@@ -158,6 +158,10 @@ module SendInvoice
         api_orders
       when ["POST", "/api/sync"]
         api_sync
+      when ["POST", "/api/sync/bulk"]
+        api_bulk_sync
+      when ["GET", "/api/sync/bulk/status"]
+        api_bulk_sync_status
       when ["POST", "/api/sync/all"]
         api_sync_all
       when ["GET", "/api/sync/status"]
@@ -605,6 +609,18 @@ module SendInvoice
       payload = request_payload
       type = payload["type"].to_s == "full" ? "full" : "incremental"
       respond_json(@sync_engine.trigger(shop: shop, type: type))
+    end
+
+    def api_bulk_sync
+      shop = require_shop
+      payload = request_payload
+      type = payload["type"].to_s == "incremental" ? "incremental" : "full"
+      respond_json(@sync_engine.trigger_bulk(shop: shop, type: type))
+    end
+
+    def api_bulk_sync_status
+      shop = require_shop
+      respond_json(@sync_engine.bulk_status(shop["shop_domain"]))
     end
 
     def api_sync_all

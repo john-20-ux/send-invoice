@@ -97,6 +97,53 @@ class SendInvoiceAppTest < Minitest::Test
     ENV.delete("MOCK_MODE")
   end
 
+  def test_bulk_sync_imports_jsonl_and_updates_checkpoint
+    store, sync_engine, _shopify_client, database_path = build_real_sync_engine(FakeBulkShopifyClient.new)
+    shop = store.shop("sync-test.myshopify.com")
+
+    result = sync_engine.trigger_bulk(shop: shop, type: "full")
+    assert_equal true, result["started"]
+
+    wait_for_sync(store, shop["shop_domain"])
+    job = wait_for_bulk_job(store, shop["shop_domain"])
+    orders = store.orders(shop["shop_domain"], limit: 10)["orders"]
+    state = store.sync_state(shop["shop_domain"])
+
+    assert_equal "completed", job["status"]
+    assert_equal false, job["fallback_used"]
+    assert_equal 1, job["imported_count"]
+    assert_equal 1, orders.length
+    assert_equal "#2001", orders.first["name"]
+    assert_equal "Bulk Vendor", orders.first["line_items"].first["vendor"]
+    assert_equal "2026-06-12T12:00:00Z", state["last_order_updated_at"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV.delete("MOCK_MODE")
+  end
+
+  def test_bulk_sync_falls_back_to_paginated_graphql_when_bulk_fails
+    store, sync_engine, _shopify_client, database_path = build_real_sync_engine(FakeFailingBulkShopifyClient.new)
+    shop = store.shop("sync-test.myshopify.com")
+
+    result = sync_engine.trigger_bulk(shop: shop, type: "full")
+    assert_equal true, result["started"]
+
+    job = wait_for_bulk_job(store, shop["shop_domain"])
+    orders = store.orders(shop["shop_domain"], limit: 10)["orders"]
+
+    assert_equal "fallback_completed", job["status"]
+    assert_equal true, job["fallback_used"]
+    assert_equal 2, orders.length
+    assert_equal "completed", store.latest_sync_log(shop["shop_domain"])["status"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV.delete("MOCK_MODE")
+  end
+
   private
 
   class FakeShopifyClient
@@ -178,6 +225,77 @@ class SendInvoiceAppTest < Minitest::Test
     end
   end
 
+  class FakeBulkShopifyClient < FakeShopifyClient
+    def start_bulk_query(_shop_domain, _access_token, _query)
+      { "id" => "gid://shopify/BulkOperation/1", "status" => "CREATED" }
+    end
+
+    def bulk_operation(_shop_domain, _access_token, operation_id)
+      {
+        "id" => operation_id,
+        "status" => "COMPLETED",
+        "errorCode" => nil,
+        "objectCount" => "2",
+        "fileSize" => "512",
+        "url" => "https://bulk.example.test/orders.jsonl",
+        "partialDataUrl" => nil
+      }
+    end
+
+    def stream_bulk_result(_url)
+      bulk_lines.each { |line| yield line }
+    end
+
+    private
+
+    def bulk_lines
+      order_id = "gid://shopify/Order/2001"
+      [
+        JSON.generate({
+          "id" => order_id,
+          "name" => "#2001",
+          "createdAt" => "2026-06-12T10:00:00Z",
+          "updatedAt" => "2026-06-12T12:00:00Z",
+          "fullyPaid" => true,
+          "displayFinancialStatus" => "PAID",
+          "displayFulfillmentStatus" => "FULFILLED",
+          "totalDiscountsSet" => money("0.00"),
+          "totalPriceSet" => money("250.00"),
+          "totalRefundedSet" => money("0.00"),
+          "totalShippingPriceSet" => money("20.00"),
+          "totalTaxSet" => money("10.00"),
+          "totalTipReceivedSet" => money("0.00"),
+          "totalWeight" => 320,
+          "transactions" => [{ "amountSet" => money("250.00") }],
+          "customer" => {
+            "id" => "gid://shopify/Customer/2",
+            "firstName" => "Grace",
+            "lastName" => "Hopper",
+            "email" => "grace@example.com",
+            "phone" => nil
+          }
+        }),
+        JSON.generate({
+          "__parentId" => order_id,
+          "id" => "#{order_id}/LineItem/1",
+          "sku" => "BULK-1",
+          "title" => "Bulk Notebook",
+          "variantTitle" => "Blue",
+          "vendor" => "Bulk Vendor",
+          "quantity" => 2,
+          "currentQuantity" => 2,
+          "originalTotalSet" => money("220.00")
+        })
+      ]
+    end
+  end
+
+  class FakeFailingBulkShopifyClient < FakeShopifyClient
+    def start_bulk_query(_shop_domain, _access_token, _query)
+      raise "Shopify bulk query error: temporary Shopify failure"
+    end
+  end
+
   def build_app(onboarded:, order_count:)
     database_path = File.join(Dir.tmpdir, "send_invoice_test_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
     root = File.expand_path("../..", __dir__)
@@ -203,7 +321,7 @@ class SendInvoiceAppTest < Minitest::Test
     [app, store, database_path]
   end
 
-  def build_real_sync_engine
+  def build_real_sync_engine(shopify_client = FakeShopifyClient.new)
     database_path = File.join(Dir.tmpdir, "send_invoice_real_sync_test_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
     root = File.expand_path("../..", __dir__)
     ENV["DATABASE_PATH"] = database_path
@@ -221,7 +339,6 @@ class SendInvoiceAppTest < Minitest::Test
       "access_token" => "shpat_test",
       "onboarded" => true
     })
-    shopify_client = FakeShopifyClient.new
     sync_engine = SendInvoice::SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
 
     [store, sync_engine, shopify_client, database_path]
@@ -236,6 +353,18 @@ class SendInvoiceAppTest < Minitest::Test
     end
 
     flunk "Timed out waiting for sync to finish"
+  end
+
+  def wait_for_bulk_job(store, shop_domain)
+    terminal = %w[completed failed fallback_completed fallback_failed]
+    60.times do
+      job = store.latest_bulk_sync_job(shop_domain)
+      return job if job && terminal.include?(job["status"])
+
+      sleep 0.05
+    end
+
+    flunk "Timed out waiting for bulk sync to finish"
   end
 
   def perform(app, method, path, query = {}, cookies = [])

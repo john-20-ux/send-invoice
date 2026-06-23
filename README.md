@@ -78,6 +78,8 @@ The app syncs real Shopify order data through the Admin GraphQL API:
 - Incremental sync uses Shopify `updated_at` filtering, so refunds, fulfillment changes, payment status changes, and customer/order edits are picked up after the first import.
 - Sync checkpoints are stored in SQLite in `sync_states`; progress and failures are stored in `sync_logs`.
 - Manual sync is available from the Orders screen and `POST /api/sync`.
+- Bulk full sync is available at `POST /api/sync/bulk` and is intended for first install, large historical backfills, and forced full re-syncs.
+- If a bulk sync fails for a recoverable Shopify/API/import error, the app automatically falls back once to the existing paginated GraphQL full sync.
 
 To enable in-process automated sync for every installed shop with an access token:
 
@@ -99,6 +101,20 @@ curl -X POST https://your-public-app-host/api/sync/all \
   -H "Content-Type: application/json" \
   -H "X-Sync-Secret: replace-with-a-long-random-secret" \
   -d '{"type":"incremental"}'
+```
+
+To start a bulk sync for the currently authenticated shop:
+
+```bash
+curl -X POST https://your-public-app-host/api/sync/bulk \
+  -H "Content-Type: application/json" \
+  -d '{"type":"full"}'
+```
+
+Bulk job state is available at:
+
+```text
+GET /api/sync/bulk/status
 ```
 
 ## Repo Notes

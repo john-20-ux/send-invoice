@@ -68,6 +68,75 @@ module SendInvoice
       payload.fetch("data")
     end
 
+    def start_bulk_query(shop, access_token, query)
+      data = graph_ql(shop, access_token, <<~GRAPHQL, { "query" => query })
+        mutation StartBulkQuery($query: String!) {
+          bulkOperationRunQuery(query: $query) {
+            bulkOperation {
+              id
+              status
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      GRAPHQL
+      result = data.fetch("bulkOperationRunQuery")
+      errors = result.fetch("userErrors", [])
+      unless errors.empty?
+        raise "Shopify bulk query error: #{errors.map { |error| error['message'] }.join(', ')}"
+      end
+
+      result.fetch("bulkOperation")
+    end
+
+    def bulk_operation(shop, access_token, operation_id)
+      data = graph_ql(shop, access_token, <<~GRAPHQL, { "id" => operation_id })
+        query BulkOperation($id: ID!) {
+          bulkOperation(id: $id) {
+            id
+            status
+            errorCode
+            createdAt
+            completedAt
+            objectCount
+            fileSize
+            url
+            partialDataUrl
+          }
+        }
+      GRAPHQL
+
+      data.fetch("bulkOperation")
+    end
+
+    def stream_bulk_result(url)
+      uri = URI(url)
+      buffer = +""
+      request = Net::HTTP::Get.new(uri)
+
+      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
+        http.request(request) do |response|
+          unless response.is_a?(Net::HTTPSuccess)
+            raise "Shopify bulk result download failed: #{response.code} #{response.body}"
+          end
+
+          response.read_body do |chunk|
+            buffer << chunk
+            while (index = buffer.index("\n"))
+              line = buffer.slice!(0..index).strip
+              yield line unless line.empty?
+            end
+          end
+        end
+      end
+
+      line = buffer.strip
+      yield line unless line.empty?
+    end
+
     private
 
     def post_json(uri, payload, access_token: nil)

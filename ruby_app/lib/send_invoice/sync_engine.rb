@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
+require "json"
 require "thread"
 require "time"
 
 module SendInvoice
   class SyncEngine
     RATE_LIMIT_SECONDS = 300
+    BULK_POLL_SECONDS = 5
 
     ORDERS_QUERY = <<~GRAPHQL
       query SyncOrders($cursor: String, $query: String) {
@@ -65,6 +67,60 @@ module SendInvoice
       }
     GRAPHQL
 
+    BULK_ORDERS_QUERY = <<~GRAPHQL
+      {
+        orders {
+          edges {
+            node {
+              id
+              name
+              createdAt
+              updatedAt
+              fullyPaid
+              displayFinancialStatus
+              displayFulfillmentStatus
+              totalDiscountsSet { shopMoney { amount currencyCode } }
+              totalPriceSet { shopMoney { amount currencyCode } }
+              totalRefundedSet { shopMoney { amount currencyCode } }
+              totalShippingPriceSet { shopMoney { amount currencyCode } }
+              totalTaxSet { shopMoney { amount currencyCode } }
+              totalTipReceivedSet { shopMoney { amount currencyCode } }
+              totalWeight
+              transactions {
+                amountSet { shopMoney { amount currencyCode } }
+              }
+              customer {
+                id
+                firstName
+                lastName
+                email
+                phone
+              }
+              lineItems {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    variantTitle
+                    vendor
+                    quantity
+                    currentQuantity
+                    originalTotalSet {
+                      shopMoney {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    GRAPHQL
+
     def initialize(config:, store:, shopify_client:)
       @config = config
       @store = store
@@ -105,6 +161,35 @@ module SendInvoice
       end
 
       { "started" => true, "syncLogId" => sync_log["id"] }
+    end
+
+    def trigger_bulk(shop:, type: "full")
+      shop_domain = shop.fetch("shop_domain")
+      current = @store.latest_sync_log(shop_domain)
+      return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+
+      if @config.mock_mode?
+        return trigger(shop: shop, type: type, skip_rate_limit: true).merge("mode" => "mock")
+      end
+
+      sync_log = @store.create_sync_log(shop_domain, total_estimated: 0)
+      job = @store.create_bulk_sync_job(shop_domain, {
+        "sync_log_id" => sync_log["id"],
+        "sync_type" => type,
+        "status" => "queued"
+      })
+
+      Thread.new do
+        Thread.current.abort_on_exception = false
+        begin
+          run_bulk_sync(job["id"], sync_log["id"], shop, type)
+        rescue StandardError => e
+          handle_bulk_failure(job["id"], sync_log["id"], shop, type, e)
+        end
+      end
+
+      { "started" => true, "syncLogId" => sync_log["id"], "bulkJobId" => job["id"], "mode" => "bulk" }
     end
 
     def trigger_all(type: "incremental", skip_rate_limit: false)
@@ -156,6 +241,13 @@ module SendInvoice
         "finishedAt" => latest["finished_at"],
         "lastSyncedAt" => last_completed && last_completed["finished_at"]
       }
+    end
+
+    def bulk_status(shop_domain)
+      job = @store.latest_bulk_sync_job(shop_domain)
+      return { "status" => "idle" } unless job
+
+      job.merge("syncStatus" => status(shop_domain))
     end
 
     private
@@ -277,6 +369,162 @@ module SendInvoice
       raise
     end
 
+    def run_bulk_sync(job_id, sync_log_id, shop, sync_type)
+      query = bulk_orders_query(shop.fetch("shop_domain"), sync_type)
+      operation = @shopify_client.start_bulk_query(shop.fetch("shop_domain"), shop.fetch("access_token"), query)
+      operation_id = operation.fetch("id")
+
+      @store.update_bulk_sync_job(job_id, {
+        "shopify_bulk_operation_id" => operation_id,
+        "status" => normalize_bulk_status(operation["status"])
+      })
+
+      loop do
+        operation = @shopify_client.bulk_operation(shop.fetch("shop_domain"), shop.fetch("access_token"), operation_id)
+        status = normalize_bulk_status(operation["status"])
+        @store.update_bulk_sync_job(job_id, bulk_operation_attributes(operation).merge("status" => status))
+
+        case status
+        when "completed"
+          url = operation["url"] || operation["partialDataUrl"]
+          raise "Shopify bulk operation completed without a result URL" if url.to_s.empty?
+
+          @store.update_bulk_sync_job(job_id, "status" => "downloading")
+          result = import_bulk_result(url, shop.fetch("shop_domain"), sync_log_id, job_id)
+          @store.complete_sync_log(sync_log_id, total_estimated: result["imported_count"])
+          @store.upsert_sync_state(shop.fetch("shop_domain"), {
+            "last_order_updated_at" => result["last_order_updated_at"],
+            "last_cursor" => nil,
+            "last_sync_type" => "bulk_#{sync_type}"
+          })
+          @store.update_bulk_sync_job(job_id, {
+            "status" => "completed",
+            "imported_count" => result["imported_count"],
+            "completed_at" => Time.now.utc.iso8601
+          })
+          break
+        when "failed", "canceled", "expired"
+          raise "Shopify bulk operation #{status}: #{operation['errorCode']}"
+        else
+          sleep BULK_POLL_SECONDS
+        end
+      end
+    end
+
+    def import_bulk_result(url, shop_domain, sync_log_id, job_id)
+      imported = 0
+      highest_order_updated_at = nil
+      current_order = nil
+      current_line_items = []
+      pending_line_items = Hash.new { |hash, key| hash[key] = [] }
+      batch = []
+
+      flush_order = lambda do
+        next unless current_order
+
+        order = map_bulk_order_record(current_order, shop_domain, current_line_items)
+        batch << order
+        highest_order_updated_at = [highest_order_updated_at, order["updated_at"]].compact.max
+        imported += 1
+
+        if batch.length >= 250
+          @store.upsert_orders(batch)
+          @store.update_sync_log_progress(sync_log_id, imported, imported)
+          @store.update_bulk_sync_job(job_id, "imported_count" => imported)
+          batch = []
+        end
+      end
+
+      @store.update_bulk_sync_job(job_id, "status" => "importing")
+
+      @shopify_client.stream_bulk_result(url) do |line|
+        record = JSON.parse(line)
+        parent_id = record["__parentId"]
+
+        if parent_id
+          line_item = map_bulk_line_item_record(record)
+          if current_order && current_order["id"] == parent_id
+            current_line_items << line_item
+          else
+            pending_line_items[parent_id] << line_item
+          end
+          next
+        end
+
+        flush_order.call
+        current_order = record
+        current_line_items = pending_line_items.delete(record["id"]) || []
+      end
+
+      flush_order.call
+      unless batch.empty?
+        @store.upsert_orders(batch)
+        @store.update_sync_log_progress(sync_log_id, imported, imported)
+        @store.update_bulk_sync_job(job_id, "imported_count" => imported)
+      end
+
+      { "imported_count" => imported, "last_order_updated_at" => highest_order_updated_at }
+    end
+
+    def handle_bulk_failure(job_id, sync_log_id, shop, sync_type, error)
+      @store.update_bulk_sync_job(job_id, {
+        "status" => "failed",
+        "error_message" => error.message,
+        "completed_at" => Time.now.utc.iso8601
+      })
+      @store.fail_sync_log(sync_log_id, error.message)
+
+      return unless fallback_allowed?(error)
+
+      fallback_log = @store.create_sync_log(shop.fetch("shop_domain"), total_estimated: 0)
+      @store.update_bulk_sync_job(job_id, {
+        "fallback_used" => true,
+        "fallback_sync_log_id" => fallback_log["id"],
+        "status" => "fallback_running"
+      })
+
+      run_shopify_sync(fallback_log["id"], shop, nil, sync_type)
+      @store.update_bulk_sync_job(job_id, {
+        "status" => "fallback_completed",
+        "completed_at" => Time.now.utc.iso8601
+      })
+    rescue StandardError => fallback_error
+      @store.update_bulk_sync_job(job_id, {
+        "status" => "fallback_failed",
+        "error_message" => fallback_error.message,
+        "completed_at" => Time.now.utc.iso8601
+      })
+      @store.fail_sync_log(fallback_log["id"], fallback_error.message) if fallback_log
+    end
+
+    def fallback_allowed?(error)
+      !error.message.match?(/401|403|unauthorized|access token|invalid token/i)
+    end
+
+    def bulk_orders_query(shop_domain, sync_type)
+      return BULK_ORDERS_QUERY unless sync_type == "incremental"
+
+      state = @store.sync_state(shop_domain)
+      last_order_updated_at = state && state["last_order_updated_at"]
+      return BULK_ORDERS_QUERY if last_order_updated_at.to_s.empty?
+
+      BULK_ORDERS_QUERY.sub("orders {", "orders(query: #{JSON.generate("updated_at:>=#{last_order_updated_at}")}) {")
+    end
+
+    def bulk_operation_attributes(operation)
+      {
+        "object_count" => operation["objectCount"].to_i,
+        "file_size" => operation["fileSize"].to_i,
+        "result_url" => operation["url"],
+        "partial_data_url" => operation["partialDataUrl"],
+        "error_code" => operation["errorCode"]
+      }
+    end
+
+    def normalize_bulk_status(status)
+      status.to_s.downcase
+    end
+
     def map_order_node(node, shop_domain)
       total_price = money(node["totalPriceSet"])
       {
@@ -322,6 +570,55 @@ module SendInvoice
         end,
         "raw_data" => node,
         "synced_at" => Time.now.utc.iso8601
+      }
+    end
+
+    def map_bulk_order_record(record, shop_domain, line_items)
+      total_price = money(record["totalPriceSet"])
+      {
+        "id" => record["id"],
+        "shop_domain" => shop_domain,
+        "name" => record["name"],
+        "created_at" => record["createdAt"],
+        "updated_at" => record["updatedAt"] || record["createdAt"],
+        "fully_paid" => record["fullyPaid"] || false,
+        "financial_status" => record["displayFinancialStatus"] || "PENDING",
+        "fulfillment_status" => record["displayFulfillmentStatus"],
+        "total_price_amount" => total_price["amount"],
+        "total_price_currency" => total_price["currency"],
+        "total_discounts_amount" => money(record["totalDiscountsSet"])["amount"],
+        "total_refunded_amount" => money(record["totalRefundedSet"])["amount"],
+        "total_shipping_amount" => money(record["totalShippingPriceSet"])["amount"],
+        "total_tax_amount" => money(record["totalTaxSet"])["amount"],
+        "total_tip_amount" => money(record["totalTipReceivedSet"])["amount"],
+        "total_weight" => record["totalWeight"],
+        "customer_id" => record.dig("customer", "id"),
+        "customer_first_name" => record.dig("customer", "firstName"),
+        "customer_last_name" => record.dig("customer", "lastName"),
+        "customer_email" => record.dig("customer", "email"),
+        "customer_phone" => record.dig("customer", "phone"),
+        "line_items" => line_items,
+        "transactions" => Array(record["transactions"]).map do |transaction|
+          value = money(transaction["amountSet"])
+          { "amount" => value["amount"], "currency" => value["currency"] }
+        end,
+        "raw_data" => record.merge("lineItems" => line_items),
+        "synced_at" => Time.now.utc.iso8601
+      }
+    end
+
+    def map_bulk_line_item_record(record)
+      line_total = money(record["originalTotalSet"])
+      {
+        "id" => record["id"],
+        "sku" => record["sku"],
+        "title" => record["title"],
+        "variantTitle" => record["variantTitle"],
+        "vendor" => record["vendor"],
+        "quantity" => record["quantity"],
+        "currentQuantity" => record["currentQuantity"],
+        "totalAmount" => line_total["amount"],
+        "totalCurrency" => line_total["currency"]
       }
     end
 

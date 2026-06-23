@@ -86,6 +86,33 @@ module SendInvoice
             FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE
           );
 
+          CREATE TABLE IF NOT EXISTS bulk_sync_jobs (
+            id TEXT PRIMARY KEY,
+            shop_domain TEXT NOT NULL,
+            sync_log_id TEXT,
+            shopify_bulk_operation_id TEXT,
+            sync_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            object_count INTEGER NOT NULL DEFAULT 0,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            result_url TEXT,
+            partial_data_url TEXT,
+            imported_count INTEGER NOT NULL DEFAULT 0,
+            fallback_used INTEGER NOT NULL DEFAULT 0,
+            fallback_sync_log_id TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE,
+            FOREIGN KEY (sync_log_id) REFERENCES sync_logs(id) ON DELETE SET NULL,
+            FOREIGN KEY (fallback_sync_log_id) REFERENCES sync_logs(id) ON DELETE SET NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_shop_started ON bulk_sync_jobs(shop_domain, started_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_operation ON bulk_sync_jobs(shopify_bulk_operation_id);
+
           CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             shop_domain TEXT,
@@ -96,7 +123,10 @@ module SendInvoice
         SQL
 
         ensure_column(db, "orders", "updated_at", "TEXT")
+        ensure_column(db, "bulk_sync_jobs", "fallback_sync_log_id", "TEXT")
         db.execute("CREATE INDEX IF NOT EXISTS idx_orders_shop_updated ON orders(shop_domain, updated_at DESC)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_shop_started ON bulk_sync_jobs(shop_domain, started_at DESC)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_operation ON bulk_sync_jobs(shopify_bulk_operation_id)")
       end
     end
 
