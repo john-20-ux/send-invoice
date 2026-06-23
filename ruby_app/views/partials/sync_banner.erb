@@ -1,0 +1,39 @@
+<% hidden = @sync_status["status"] == "idle" && !@sync_status["lastSyncedAt"] %>
+<% progress = percentage(@sync_status["ordersSynced"], @sync_status["totalEstimated"]) %>
+<div
+  id="sync-banner"
+  class="sync-banner <%= "is-hidden" if hidden %>"
+  data-api-path="/api/sync/status"
+  data-shop-domain="<%= h(@shop && @shop["shop_domain"]) %>"
+  data-status="<%= h(@sync_status["status"]) %>"
+  data-orders-synced="<%= @sync_status["ordersSynced"] %>"
+  data-total-estimated="<%= @sync_status["totalEstimated"] %>"
+  data-last-synced-at="<%= h(@sync_status["lastSyncedAt"]) %>"
+>
+  <div class="sync-copy">
+    <strong data-role="status-label">
+      <% if @sync_status["status"] == "running" %>
+        Syncing orders
+      <% elsif @sync_status["status"] == "failed" %>
+        Sync failed
+      <% elsif @sync_status["lastSyncedAt"] %>
+        Last synced <%= time_ago(@sync_status["lastSyncedAt"]) %>
+      <% else %>
+        Sync idle
+      <% end %>
+    </strong>
+    <span data-role="status-meta">
+      <% if @sync_status["status"] == "running" %>
+        <%= @sync_status["ordersSynced"] %> of <%= @sync_status["totalEstimated"] %> orders synced
+      <% elsif @sync_status["status"] == "failed" %>
+        The latest sync did not complete.
+      <% else %>
+        Shopify data is ready.
+      <% end %>
+    </span>
+  </div>
+  <div class="sync-progress">
+    <span data-role="progress-bar" style="width:<%= progress %>%"></span>
+  </div>
+  <span class="sync-progress-value" data-role="progress-value"><%= progress %>%</span>
+</div>

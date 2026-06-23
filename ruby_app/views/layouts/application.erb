@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title><%= h(@page_title || "Send Invoice") %></title>
+    <link rel="stylesheet" href="/assets/app.css">
+  </head>
+  <body class="app-body">
+    <div class="page-noise"></div>
+    <% if @shop && @shop["onboarded"] %>
+      <div class="app-frame">
+        <aside class="sidebar">
+          <a href="/dashboard" class="brand">
+            <span class="brand-mark">SI</span>
+            <span>
+              <strong>Send Invoice</strong>
+              <small>Orders and payouts</small>
+            </span>
+          </a>
+          <nav class="nav-stack">
+            <% @nav_items.each do |item| %>
+              <a href="<%= item["path"] %>" class="nav-link <%= active_path?(@current_path, item["path"]) ? "is-active" : "" %>">
+                <span><%= h(item["label"]) %></span>
+              </a>
+            <% end %>
+          </nav>
+          <div class="sidebar-footnote">
+            <p><strong><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></strong></p>
+            <p><%= h(@shop["shop_domain"]) %></p>
+          </div>
+        </aside>
+
+        <main class="workspace">
+          <%= render_partial("trial_banner", shop: @shop) %>
+          <%= render_partial("sync_banner", shop: @shop, sync_status: @sync_status) %>
+          <header class="topbar">
+            <div>
+              <p class="eyebrow"><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></p>
+              <h1 class="topbar-title"><%= h(@page_title || "Overview") %></h1>
+            </div>
+            <div class="topbar-meta">
+              <span class="pill"><%= h(@shop["current_plan"].capitalize) %> plan</span>
+              <span class="pill pill-muted"><%= h(@shop["owner_email"] || "No email yet") %></span>
+            </div>
+          </header>
+
+          <% if @flash %>
+            <div class="<%= flash_class(@flash["type"]) %>">
+              <span><%= h(@flash["message"]) %></span>
+            </div>
+          <% end %>
+
+          <section class="page-content">
+            <%= @content %>
+          </section>
+        </main>
+      </div>
+    <% else %>
+      <main class="public-shell">
+        <header class="public-brand">
+          <a href="/" class="brand">
+            <span class="brand-mark">SI</span>
+            <span>
+              <strong>Send Invoice</strong>
+              <small>Orders and payouts</small>
+            </span>
+          </a>
+        </header>
+
+        <% if @flash %>
+          <div class="<%= flash_class(@flash["type"]) %>">
+            <span><%= h(@flash["message"]) %></span>
+          </div>
+        <% end %>
+
+        <section class="public-content">
+          <%= @content %>
+        </section>
+      </main>
+    <% end %>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

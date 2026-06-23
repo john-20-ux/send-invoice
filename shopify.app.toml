@@ -1,7 +1,7 @@
-# Shopify App Configuration
-# Learn more: https://shopify.dev/docs/apps/tools/cli/configuration
+# Shopify App Configuration for the Ruby rebuild.
+# Point `application_url` at the public HTTPS host serving `app.rb`.
 
-name = "Orders Sync Pro"
+name = "Send Invoice Ruby"
 client_id = "your_api_key_here"
 application_url = "https://your-tunnel-url.trycloudflare.com"
 
@@ -12,10 +12,3 @@ redirect_urls = [
 
 [access_scopes]
 scopes = "read_orders"
-
-[webhooks]
-
-  [webhooks.privacy_compliance]
-  customer_deletion_url = "https://your-tunnel-url.trycloudflare.com/api/webhooks/customer-deletion"
-  customer_data_request_url = "https://your-tunnel-url.trycloudflare.com/api/webhooks/customer-data-request"
-  shop_deletion_url = "https://your-tunnel-url.trycloudflare.com/api/webhooks/shop-deletion"

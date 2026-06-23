@@ -1,0 +1,53 @@
+<div class="grid-four">
+  <article class="metric-card">
+    <p class="label">Total orders</p>
+    <p class="value"><%= @stats["total_orders"] %></p>
+  </article>
+  <article class="metric-card">
+    <p class="label">Total revenue</p>
+    <p class="value"><%= format_money(@stats["total_revenue"], "USD") %></p>
+  </article>
+  <article class="metric-card">
+    <p class="label">Paid orders</p>
+    <p class="value"><%= @stats["paid_orders"] %></p>
+  </article>
+  <article class="metric-card">
+    <p class="label">Fulfilled</p>
+    <p class="value"><%= @stats["fulfilled"] %></p>
+  </article>
+</div>
+
+<div class="grid-two">
+  <section class="section-card">
+    <p class="eyebrow">Last 30 days</p>
+    <h2>Daily revenue</h2>
+    <p class="section-note">Recent order value by creation date.</p>
+    <div class="chart-bars compact">
+      <% @daily_points.last(15).each do |point| %>
+        <% height = ((point["revenue"] / @max_daily_revenue.to_f) * 100).round %>
+        <div class="chart-column">
+          <div class="chart-value"><%= format_money(point["revenue"], "USD") %></div>
+          <div class="chart-bar" style="height:<%= [height, 6].max %>%"></div>
+          <div class="chart-caption"><%= point["date"][5..9] %></div>
+        </div>
+      <% end %>
+    </div>
+  </section>
+
+  <section class="section-card">
+    <p class="eyebrow">Financial status</p>
+    <h2>Order mix</h2>
+    <p class="section-note">Current payment state across imported orders.</p>
+    <% max_count = [@status_points.map { |item| item["count"] }.max.to_i, 1].max %>
+    <div class="status-list">
+      <% @status_points.each do |item| %>
+        <% width = ((item["count"].to_f / max_count) * 100).round %>
+        <div class="status-row">
+          <span><%= h(item["status"]) %></span>
+          <div class="meter"><span style="width:<%= width %>%"></span></div>
+          <strong><%= item["count"] %></strong>
+        </div>
+      <% end %>
+    </div>
+  </section>
+</div>

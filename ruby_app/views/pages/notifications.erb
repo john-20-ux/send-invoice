@@ -1,0 +1,51 @@
+<form method="post" action="/notifications" class="cards-grid">
+  <% {
+    "email" => { "title" => "Email", "description" => "Send invoices and updates by email." },
+    "whatsapp" => { "title" => "WhatsApp", "description" => "Send invoice messages through WhatsApp." },
+    "slack" => { "title" => "Slack", "description" => "Post alerts to a Slack channel." },
+    "basecamp" => { "title" => "Basecamp", "description" => "Add payout updates to a Basecamp project." }
+  }.each do |channel, meta| %>
+    <% config = @notification_config[channel] %>
+    <section class="channel-card">
+      <div class="checkbox-row">
+        <input id="<%= channel %>_enabled" name="<%= channel %>_enabled" type="checkbox" value="1" <%= config["enabled"] ? "checked" : "" %>>
+        <label for="<%= channel %>_enabled"><strong><%= meta["title"] %></strong></label>
+      </div>
+      <p class="muted" style="margin-top:10px"><%= meta["description"] %></p>
+
+      <% if channel == "email" %>
+        <div class="field" style="margin-top:14px">
+          <label for="email_subject">Subject</label>
+          <input id="email_subject" name="email_subject" type="text" value="<%= h(config["subject"]) %>">
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label for="email_body">Body</label>
+          <textarea id="email_body" name="email_body"><%= h(config["body"]) %></textarea>
+        </div>
+      <% elsif channel == "whatsapp" %>
+        <div class="field" style="margin-top:14px">
+          <label for="whatsapp_phone">Phone</label>
+          <input id="whatsapp_phone" name="whatsapp_phone" type="text" value="<%= h(config["phone"]) %>">
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label for="whatsapp_message">Message</label>
+          <textarea id="whatsapp_message" name="whatsapp_message"><%= h(config["message"]) %></textarea>
+        </div>
+      <% elsif channel == "slack" %>
+        <div class="field" style="margin-top:14px">
+          <label for="slack_channel">Channel</label>
+          <input id="slack_channel" name="slack_channel" type="text" value="<%= h(config["channel"]) %>">
+        </div>
+      <% else %>
+        <div class="field" style="margin-top:14px">
+          <label for="basecamp_project">Project</label>
+          <input id="basecamp_project" name="basecamp_project" type="text" value="<%= h(config["project"]) %>">
+        </div>
+      <% end %>
+    </section>
+  <% end %>
+
+  <div class="button-inline">
+    <button class="button" type="submit">Save notification settings</button>
+  </div>
+</form>

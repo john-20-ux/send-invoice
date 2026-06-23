@@ -1,0 +1,58 @@
+<form method="post" action="/vendors" class="stack">
+  <section class="section-card">
+    <div class="toolbar">
+      <div>
+        <p class="eyebrow">Payout desk</p>
+        <h2>Vendor payouts</h2>
+        <p class="section-note">Review revenue, commission, deductions, and net payable by vendor.</p>
+      </div>
+      <div class="button-inline">
+        <button class="button" type="submit">Save</button>
+        <span class="pill pill-muted">Printable payout sheets</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="table-shell">
+    <% if @vendor_summaries.empty? %>
+      <div class="empty-state">No vendor data is available yet.</div>
+    <% else %>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Vendor</th>
+            <th class="align-right">Orders</th>
+            <th class="align-right">Revenue</th>
+            <th class="align-right">Commission %</th>
+            <th class="align-right">Commission</th>
+            <th class="align-right">Deductions</th>
+            <th class="align-right">Net payable</th>
+            <th>Invoice</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @vendor_summaries.each do |vendor| %>
+            <% slug = slugify(vendor["name"]) %>
+            <tr>
+              <td>
+                <strong><%= h(vendor["name"]) %></strong>
+                <input type="hidden" name="vendor_name__<%= slug %>" value="<%= h(vendor["name"]) %>">
+              </td>
+              <td class="align-right"><%= vendor["total_orders"] %></td>
+              <td class="align-right"><%= format_money(vendor["total_revenue"], "USD") %></td>
+              <td class="align-right">
+                <input type="number" step="0.5" min="0" name="rate__<%= slug %>" value="<%= vendor["commission_rate"] %>">
+              </td>
+              <td class="align-right"><%= format_money(vendor["total_commission"], "USD") %></td>
+              <td class="align-right">
+                <input type="number" step="0.5" min="0" name="deductions__<%= slug %>" value="<%= vendor["custom_deductions"] %>">
+              </td>
+              <td class="align-right"><strong><%= format_money(vendor["net_payable"], "USD") %></strong></td>
+              <td><a class="button-ghost" href="/vendors/<%= slug %>/invoice">Open payout sheet</a></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    <% end %>
+  </section>
+</form>

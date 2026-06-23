@@ -16,6 +16,9 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+ruby_app/db/*.sqlite3
+vendor/bundle
+.bundle
 
 # Editor directories and files
 .vscode/*

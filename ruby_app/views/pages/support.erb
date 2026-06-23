@@ -1,0 +1,54 @@
+<div class="grid-three">
+  <section class="section-card">
+    <p class="eyebrow">Docs</p>
+    <h2>Guides</h2>
+    <p class="section-note">Setup, sync, and invoice workflow references.</p>
+  </section>
+  <section class="section-card">
+    <p class="eyebrow">Live chat</p>
+    <h2>Team access</h2>
+    <p class="section-note">Escalate sync or payout issues for review.</p>
+  </section>
+  <section class="section-card">
+    <p class="eyebrow">Email</p>
+    <h2>support@example.com</h2>
+    <p class="section-note">We respond within one business day.</p>
+  </section>
+</div>
+
+<section class="section-card stack">
+  <div>
+    <p class="eyebrow">FAQ</p>
+    <h2>Frequently asked questions</h2>
+  </div>
+  <% @faq.each do |item| %>
+    <details class="faq-item">
+      <summary><%= h(item["question"]) %></summary>
+      <p><%= h(item["answer"]) %></p>
+    </details>
+  <% end %>
+</section>
+
+<section class="section-card">
+  <p class="eyebrow">Contact us</p>
+  <h2>Send a message</h2>
+  <form method="post" action="/support" class="stack" style="margin-top:18px">
+    <div class="grid-two">
+      <div class="field">
+        <label for="support_name">Name</label>
+        <input id="support_name" name="name" type="text" required>
+      </div>
+      <div class="field">
+        <label for="support_email">Email</label>
+        <input id="support_email" name="email" type="email" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="support_message">How can we help?</label>
+      <textarea id="support_message" name="message" required></textarea>
+    </div>
+    <div class="button-inline">
+      <button class="button" type="submit">Send message</button>
+    </div>
+  </form>
+</section>

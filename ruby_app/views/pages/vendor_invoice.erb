@@ -1,0 +1,35 @@
+<header class="preview-header">
+  <div>
+    <p class="eyebrow">Vendor payout</p>
+    <h1><%= h(@vendor_summary["name"]) %></h1>
+    <p class="muted" style="margin-top:8px">Generated on <%= format_datetime(Time.now.utc.iso8601) %></p>
+  </div>
+  <div class="preview-meta">
+    <span>Total orders: <strong><%= @vendor_summary["total_orders"] %></strong></span>
+    <span>Commission rate: <strong><%= @vendor_summary["commission_rate"] %>%</strong></span>
+  </div>
+</header>
+
+<section class="preview-grid">
+  <article class="preview-card">
+    <h3>Total revenue</h3>
+    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["total_revenue"], "USD") %></p>
+  </article>
+  <article class="preview-card">
+    <h3>Total commission</h3>
+    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["total_commission"], "USD") %></p>
+  </article>
+  <article class="preview-card">
+    <h3>Deductions</h3>
+    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["custom_deductions"], "USD") %></p>
+  </article>
+  <article class="preview-card">
+    <h3>Net payable</h3>
+    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["net_payable"], "USD") %></p>
+  </article>
+</section>
+
+<section class="section-card">
+  <h2>Payout summary</h2>
+  <p class="section-note" style="margin-top:10px">Use the browser print dialog to save this payout sheet as a PDF.</p>
+</section>

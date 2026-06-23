@@ -1,0 +1,75 @@
+<% if !@can_connect && !@mock_mode %>
+  <article class="hero-card">
+    <p class="eyebrow">Install first</p>
+    <h1>Connect Shopify before the app can load.</h1>
+    <p>Use the OAuth entrypoint from your Shopify development store. Local mock mode starts automatically when credentials are not configured.</p>
+    <code>/auth?shop=your-store.myshopify.com</code>
+  </article>
+<% else %>
+  <div class="stepper">
+    <% 3.times do |index| %>
+      <% step_number = index + 1 %>
+      <% step_class = if step_number < @onboarding_step
+                        "step is-complete"
+                      elsif step_number == @onboarding_step
+                        "step is-active"
+                      else
+                        "step"
+                      end %>
+      <span class="<%= step_class %>"><%= step_number %></span>
+      <% unless step_number == 3 %>
+        <span class="step-line"></span>
+      <% end %>
+    <% end %>
+  </div>
+
+  <% if @onboarding_step == 1 %>
+    <article class="hero-card">
+      <p class="eyebrow">Step 1</p>
+      <h1>Merchant contact</h1>
+      <p>Set the email used for sync updates and billing notices.</p>
+      <form method="post" action="/onboarding/email" class="stack" style="margin-top:24px">
+        <div class="field">
+          <label for="owner-email">Owner email</label>
+          <input id="owner-email" name="email" type="email" placeholder="you@example.com" value="<%= h(@shop && @shop["owner_email"]) %>">
+          <small>Optional during setup.</small>
+        </div>
+        <div class="button-inline">
+          <button class="button" type="submit">Continue</button>
+          <a class="button-ghost" href="/onboarding/step-2">Skip for now</a>
+        </div>
+      </form>
+    </article>
+  <% elsif @onboarding_step == 2 %>
+    <article class="hero-card">
+      <p class="eyebrow">Step 2</p>
+      <h1>Store connection</h1>
+      <p>Confirm the Shopify store before the initial order import begins.</p>
+      <form method="post" action="/onboarding/connect" class="stack" style="margin-top:24px">
+        <div class="field">
+          <label for="shop-domain">Shop domain</label>
+          <input id="shop-domain" name="shop_domain" type="text" value="<%= h((@shop && @shop["shop_domain"]) || MockData::DEMO_SHOP_DOMAIN) %>" <%= @shop ? "readonly" : "" %>>
+        </div>
+        <div class="button-inline">
+          <button class="button" type="submit">Connect store</button>
+          <a class="button-ghost" href="/onboarding">Back</a>
+        </div>
+      </form>
+    </article>
+  <% else %>
+    <article class="hero-card" id="onboarding-sync" data-api-path="/api/sync" data-status-path="/api/sync/status" data-complete-path="/onboarding/complete" data-autostart="true">
+      <p class="eyebrow">Step 3</p>
+      <h1 data-role="sync-label">Importing orders</h1>
+      <p data-role="sync-meta" style="margin-top:12px">Preparing your initial order sync.</p>
+      <div class="sync-progress" style="width:100%;margin-top:24px">
+        <span data-role="sync-progress" style="width:<%= percentage(@sync_status["ordersSynced"], @sync_status["totalEstimated"]) %>%"></span>
+      </div>
+      <div class="button-inline" style="margin-top:24px">
+        <button type="button" class="button" data-role="sync-retry" hidden>Retry sync</button>
+      </div>
+      <noscript>
+        <p class="muted" style="margin-top:18px">JavaScript is required for the automatic sync step. You can still trigger it with `POST /api/sync` and then open `/onboarding/complete` after the sync finishes.</p>
+      </noscript>
+    </article>
+  <% end %>
+<% end %>

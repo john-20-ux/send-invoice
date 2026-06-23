@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v bundle >/dev/null 2>&1; then
+  export BUNDLE_USER_HOME="${BUNDLE_USER_HOME:-$PWD/.bundle/home}"
+  export BUNDLE_USER_CACHE="${BUNDLE_USER_CACHE:-$PWD/.bundle/cache}"
+  export BUNDLE_USER_CONFIG="${BUNDLE_USER_CONFIG:-$PWD/.bundle/config}"
+  bundle config --local path vendor/bundle
+  bundle install
+else
+  echo "Bundler is required. Install bundler first."
+  exit 1
+fi

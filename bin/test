@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ruby -I ruby_app/lib ruby_app/test/app_test.rb

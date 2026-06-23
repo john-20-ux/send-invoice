@@ -1,0 +1,163 @@
+<section class="section-card">
+  <div class="toolbar">
+    <div>
+      <p class="eyebrow">Order desk</p>
+      <h2>Orders</h2>
+      <p class="section-note"><%= @order_result["total"] %> orders match the current filters.</p>
+    </div>
+    <form method="post" action="/orders/sync">
+      <button class="button" type="submit">Sync</button>
+    </form>
+  </div>
+
+  <form method="get" action="/orders" class="grid-three" style="margin-top:20px">
+    <div class="field">
+      <label for="search">Search</label>
+      <input id="search" type="text" name="search" value="<%= h(@filters[:search]) %>" placeholder="Name, order, email">
+    </div>
+    <div class="field">
+      <label for="from">From</label>
+      <input id="from" type="date" name="from" value="<%= h(@filters[:from]) %>">
+    </div>
+    <div class="field">
+      <label for="to">To</label>
+      <input id="to" type="date" name="to" value="<%= h(@filters[:to]) %>">
+    </div>
+    <div class="button-inline">
+      <button class="button" type="submit">Apply</button>
+      <a class="button-ghost" href="/orders">Clear</a>
+    </div>
+  </form>
+</section>
+
+<section class="table-shell">
+  <% if @order_result["orders"].empty? %>
+    <div class="empty-state">No orders match your filters.</div>
+  <% else %>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Date</th>
+          <th>Customer</th>
+          <th>Email</th>
+          <th class="align-right">Items</th>
+          <th class="align-right">Total</th>
+          <th>Payment</th>
+          <th>Fulfillment</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @order_result["orders"].each do |order| %>
+          <% link = query_path("/orders", {
+            "search" => @filters[:search],
+            "from" => @filters[:from],
+            "to" => @filters[:to],
+            "page" => @order_result["page"],
+            "order_id" => order["id"]
+          }) %>
+          <tr>
+            <td><strong><%= h(order["name"]) %></strong></td>
+            <td><%= format_date(order["created_at"]) %></td>
+            <td><%= h("#{order["customer_first_name"]} #{order["customer_last_name"]}".strip) %></td>
+            <td><%= h(order["customer_email"] || "-") %></td>
+            <td class="align-right"><%= order["line_items"].length %></td>
+            <td class="align-right"><%= format_money(order["total_price_amount"], order["total_price_currency"]) %></td>
+            <td><span class="<%= badge_class(order["financial_status"]) %>"><%= h(order["financial_status"]) %></span></td>
+            <td><span class="<%= badge_class(order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(order["fulfillment_status"] || "UNFULFILLED") %></span></td>
+            <td><a class="button-ghost" href="<%= link %>">View</a></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>
+
+<% if @order_result["total_pages"] > 1 %>
+  <section class="section-card pagination">
+    <span>Page <%= @order_result["page"] %> of <%= @order_result["total_pages"] %></span>
+    <div class="pagination-links">
+      <% if @order_result["page"] > 1 %>
+        <a class="button-ghost" href="<%= query_path(@pagination_path, {
+          "search" => @filters[:search],
+          "from" => @filters[:from],
+          "to" => @filters[:to],
+          "page" => @order_result["page"] - 1
+        }) %>">Previous</a>
+      <% end %>
+      <% if @order_result["page"] < @order_result["total_pages"] %>
+        <a class="button-ghost" href="<%= query_path(@pagination_path, {
+          "search" => @filters[:search],
+          "from" => @filters[:from],
+          "to" => @filters[:to],
+          "page" => @order_result["page"] + 1
+        }) %>">Next</a>
+      <% end %>
+    </div>
+  </section>
+<% end %>
+
+<% if @selected_order %>
+  <% subtotal = @selected_order["line_items"].sum { |line_item| line_item["totalAmount"].to_f } %>
+  <section class="detail-panel" id="detail">
+    <div class="toolbar">
+      <div>
+        <p class="eyebrow">Order detail</p>
+        <h2><%= h(@selected_order["name"]) %></h2>
+      </div>
+      <div class="button-inline">
+        <span class="<%= badge_class(@selected_order["financial_status"]) %>"><%= h(@selected_order["financial_status"]) %></span>
+        <span class="<%= badge_class(@selected_order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(@selected_order["fulfillment_status"] || "UNFULFILLED") %></span>
+      </div>
+    </div>
+
+    <div class="grid-two" style="margin-top:18px">
+      <div class="preview-card">
+        <h3>Customer</h3>
+        <p class="muted" style="margin-top:10px"><%= h("#{@selected_order["customer_first_name"]} #{@selected_order["customer_last_name"]}".strip) %></p>
+        <p class="muted"><%= h(@selected_order["customer_email"] || "No email") %></p>
+        <p class="muted"><%= h(@selected_order["customer_phone"] || "No phone") %></p>
+      </div>
+      <div class="preview-card">
+        <h3>Totals</h3>
+        <div class="totals-stack" style="margin-top:10px">
+          <span>Subtotal: <strong><%= format_money(subtotal, @selected_order["total_price_currency"]) %></strong></span>
+          <span>Discounts: <strong><%= format_money(-@selected_order["total_discounts_amount"], @selected_order["total_price_currency"]) %></strong></span>
+          <span>Shipping: <strong><%= format_money(@selected_order["total_shipping_amount"], @selected_order["total_price_currency"]) %></strong></span>
+          <span>Tax: <strong><%= format_money(@selected_order["total_tax_amount"], @selected_order["total_price_currency"]) %></strong></span>
+          <span>Total: <strong><%= format_money(@selected_order["total_price_amount"], @selected_order["total_price_currency"]) %></strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-shell" style="margin-top:20px">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Product</th>
+            <th>Variant</th>
+            <th>Vendor</th>
+            <th class="align-right">Qty</th>
+            <th class="align-right">Current Qty</th>
+            <th class="align-right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @selected_order["line_items"].each do |line_item| %>
+            <tr>
+              <td><%= h(line_item["sku"] || "-") %></td>
+              <td><%= h(line_item["title"]) %></td>
+              <td><%= h(line_item["variantTitle"] || "-") %></td>
+              <td><%= h(line_item["vendor"] || "-") %></td>
+              <td class="align-right"><%= line_item["quantity"] %></td>
+              <td class="align-right"><%= line_item["currentQuantity"] %></td>
+              <td class="align-right"><%= format_money(line_item["totalAmount"], line_item["totalCurrency"]) %></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+<% end %>

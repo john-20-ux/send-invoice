@@ -1,0 +1,181 @@
+<form method="post" action="/invoice-templates" id="invoice-template-form" class="split-layout">
+  <section class="section-card stack">
+    <div>
+      <p class="eyebrow">Editor</p>
+      <h2>Invoice template</h2>
+      <p class="section-note">Edit the default invoice copy and preview the printable output.</p>
+    </div>
+
+    <div class="field">
+      <label for="template">Template style</label>
+      <select id="template" name="template">
+        <% %w[classic modern minimal bold clean compact].each do |template| %>
+          <option value="<%= template %>" <%= @invoice_config["template"] == template ? "selected" : "" %>><%= template.capitalize %></option>
+        <% end %>
+      </select>
+    </div>
+
+    <% {
+      "company_name" => "Company name",
+      "tagline" => "Tagline",
+      "address" => "Address",
+      "phone" => "Phone",
+      "email" => "Email",
+      "website" => "Website",
+      "gst" => "GST or VAT number",
+      "bill_to" => "Bill to",
+      "client_address" => "Client address",
+      "client_email" => "Client email",
+      "invoice_number" => "Invoice number",
+      "invoice_date" => "Invoice date",
+      "due_date" => "Due date",
+      "payment_terms" => "Payment terms",
+      "notes" => "Notes",
+      "bank_details" => "Bank details",
+      "terms" => "Terms and conditions"
+    }.each do |key, label| %>
+      <div class="field">
+        <label for="<%= key %>"><%= label %></label>
+        <% if %w[address notes bank_details terms].include?(key) %>
+          <textarea id="<%= key %>" name="<%= key %>" data-preview-text="<%= key %>"><%= h(@invoice_config[key]) %></textarea>
+        <% else %>
+          <input id="<%= key %>" name="<%= key %>" type="text" value="<%= h(@invoice_config[key]) %>" data-preview-text="<%= key %>">
+        <% end %>
+      </div>
+    <% end %>
+
+    <div class="field">
+      <label for="currency_symbol">Currency symbol</label>
+      <select id="currency_symbol" name="currency_symbol" data-preview-text="currency_symbol">
+        <% ["$", "EUR ", "GBP ", "INR "].each do |symbol| %>
+          <option value="<%= symbol %>" <%= @invoice_config["currency_symbol"] == symbol ? "selected" : "" %>><%= symbol %></option>
+        <% end %>
+      </select>
+    </div>
+
+    <div class="checkbox-row">
+      <input id="visible_website" name="visible_website" type="checkbox" value="1" data-preview-toggle="website" <%= @invoice_config.dig("visible_fields", "website") ? "checked" : "" %>>
+      <label for="visible_website">Show website</label>
+    </div>
+
+    <div class="checkbox-row">
+      <input id="visible_terms" name="visible_terms" type="checkbox" value="1" data-preview-toggle="terms" <%= @invoice_config.dig("visible_fields", "terms") ? "checked" : "" %>>
+      <label for="visible_terms">Show terms and conditions</label>
+    </div>
+
+    <% @invoice_config["line_items"].each_with_index do |line_item, index| %>
+      <div class="preview-card">
+        <h3>Line item <%= index + 1 %></h3>
+        <div class="field" style="margin-top:10px">
+          <label>Description</label>
+          <input type="text" name="line_desc_<%= index %>" value="<%= h(line_item["desc"]) %>">
+        </div>
+        <div class="grid-two" style="margin-top:10px">
+          <div class="field">
+            <label>Qty</label>
+            <input type="number" step="1" name="line_qty_<%= index %>" value="<%= line_item["qty"] %>">
+          </div>
+          <div class="field">
+            <label>Rate</label>
+            <input type="number" step="0.01" name="line_rate_<%= index %>" value="<%= line_item["rate"] %>">
+          </div>
+          <div class="field">
+            <label>Discount %</label>
+            <input type="number" step="0.01" name="line_discount_<%= index %>" value="<%= line_item["discount"] %>">
+          </div>
+          <div class="field">
+            <label>Tax %</label>
+            <input type="number" step="0.01" name="line_tax_<%= index %>" value="<%= line_item["tax"] %>">
+          </div>
+        </div>
+      </div>
+    <% end %>
+
+    <div class="button-inline">
+      <button class="button" type="submit">Save</button>
+      <button class="button-ghost" type="button" onclick="window.print()">Print</button>
+    </div>
+  </section>
+
+  <section class="template-preview" id="invoice-preview">
+    <% symbol = @invoice_config["currency_symbol"] %>
+    <% line_subtotal = @invoice_config["line_items"].sum do |line_item|
+         quantity = line_item["qty"].to_f
+         rate = line_item["rate"].to_f
+         base = quantity * rate
+         base - (base * line_item["discount"].to_f / 100.0)
+       end %>
+    <% line_tax = @invoice_config["line_items"].sum do |line_item|
+         quantity = line_item["qty"].to_f
+         rate = line_item["rate"].to_f
+         base = quantity * rate
+         discounted = base - (base * line_item["discount"].to_f / 100.0)
+         discounted * line_item["tax"].to_f / 100.0
+       end %>
+    <header class="preview-header">
+      <div>
+        <h2 data-preview-key="company_name"><%= h(@invoice_config["company_name"]) %></h2>
+        <p class="muted" data-preview-key="tagline"><%= h(@invoice_config["tagline"]) %></p>
+      </div>
+      <div class="preview-meta">
+        <span><strong data-preview-key="invoice_number"><%= h(@invoice_config["invoice_number"]) %></strong></span>
+        <span data-preview-key="invoice_date"><%= h(@invoice_config["invoice_date"]) %></span>
+        <span data-preview-key="due_date"><%= h(@invoice_config["due_date"]) %></span>
+      </div>
+    </header>
+
+    <section class="preview-grid">
+      <div>
+        <p class="eyebrow">Issuer</p>
+        <p data-preview-key="address"><%= h(@invoice_config["address"]) %></p>
+        <p data-preview-key="phone"><%= h(@invoice_config["phone"]) %></p>
+        <p data-preview-key="email"><%= h(@invoice_config["email"]) %></p>
+        <p data-preview-key="gst"><%= h(@invoice_config["gst"]) %></p>
+        <p data-preview-key="website" data-visibility-key="website" <%= @invoice_config.dig("visible_fields", "website") ? "" : "hidden" %>><%= h(@invoice_config["website"]) %></p>
+      </div>
+      <div>
+        <p class="eyebrow">Bill to</p>
+        <p data-preview-key="bill_to"><%= h(@invoice_config["bill_to"]) %></p>
+        <p data-preview-key="client_address"><%= h(@invoice_config["client_address"]) %></p>
+        <p data-preview-key="client_email"><%= h(@invoice_config["client_email"]) %></p>
+        <p data-preview-key="payment_terms"><%= h(@invoice_config["payment_terms"]) %></p>
+      </div>
+    </section>
+
+    <table class="preview-line-items">
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th class="align-right">Qty</th>
+          <th class="align-right">Rate</th>
+          <th class="align-right">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @invoice_config["line_items"].each do |line_item| %>
+          <% amount = line_item["qty"].to_f * line_item["rate"].to_f %>
+          <% amount -= amount * line_item["discount"].to_f / 100.0 %>
+          <tr>
+            <td><%= h(line_item["desc"]) %></td>
+            <td class="align-right"><%= line_item["qty"] %></td>
+            <td class="align-right"><%= symbol %><%= format("%.2f", line_item["rate"].to_f) %></td>
+            <td class="align-right"><%= symbol %><%= format("%.2f", amount) %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+
+    <footer class="preview-footer">
+      <div>
+        <p class="muted" data-preview-key="notes"><%= h(@invoice_config["notes"]) %></p>
+        <p class="muted" data-preview-key="bank_details" style="margin-top:8px"><%= h(@invoice_config["bank_details"]) %></p>
+        <p class="muted" data-preview-key="terms" data-visibility-key="terms" style="margin-top:8px" <%= @invoice_config.dig("visible_fields", "terms") ? "" : "hidden" %>><%= h(@invoice_config["terms"]) %></p>
+      </div>
+      <div class="totals-stack">
+        <span>Subtotal <strong><%= symbol %><%= format("%.2f", line_subtotal) %></strong></span>
+        <span>Tax <strong><%= symbol %><%= format("%.2f", line_tax) %></strong></span>
+        <span>Total <strong><%= symbol %><%= format("%.2f", line_subtotal + line_tax) %></strong></span>
+      </div>
+    </footer>
+  </section>
+</form>

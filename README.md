@@ -1,1 +1,77 @@
+# Send Invoice Ruby Rebuild
 
+This repository is now Ruby-first. It contains a full Ruby implementation of the Shopify orders sync app with:
+
+- Shopify OAuth entrypoint at `/auth`
+- 3-step onboarding
+- dashboard analytics
+- orders explorer with detail view
+- vendor payout workspace
+- invoice template editor
+- notifications, settings, plans, and support pages
+- JSON API endpoints for shop, orders, and sync status
+
+The runtime is intentionally simple: `WEBrick` + `ERB` + `SQLite`, with no Rails dependency and no Node build.
+
+## Run It
+
+1. Install the Ruby dependency set:
+
+   ```bash
+   bundle install
+   ```
+
+2. Copy the environment file:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Start the Ruby app:
+
+   ```bash
+   bin/server
+   ```
+
+4. Open the mock install flow:
+
+   ```text
+   http://localhost:3000/auth
+   ```
+
+If `SHOPIFY_API_KEY` and `SHOPIFY_API_SECRET` are missing, the app automatically runs in mock mode and uses the demo store data set.
+
+## Tests
+
+Run the Ruby smoke suite with:
+
+```bash
+bin/test
+```
+
+## Real Shopify Mode
+
+To use the real OAuth and sync flow, set these values in `.env`:
+
+```text
+SHOPIFY_API_KEY=...
+SHOPIFY_API_SECRET=...
+SHOPIFY_SCOPES=read_orders
+HOST=https://your-public-app-host
+MOCK_MODE=false
+```
+
+Then start from:
+
+```text
+/auth?shop=your-store.myshopify.com
+```
+
+The Ruby app stores shops, orders, sync logs, and UI settings in SQLite at `ruby_app/db/send_invoice.sqlite3` by default.
+
+## Repo Notes
+
+- `app.rb` is the Ruby entrypoint.
+- `Gemfile`, `Rakefile`, and `bin/` provide the primary project workflow.
+- `ruby_app/lib/send_invoice` contains the Ruby app, data layer, sync engine, and Shopify helpers.
+- `ruby_app/views` contains the ERB screens for the admin interface.

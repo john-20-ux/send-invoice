@@ -1,0 +1,26 @@
+<section class="cards-grid">
+  <% @plans.each do |plan| %>
+    <% active = @shop["current_plan"] == plan["id"] %>
+    <article class="section-card">
+      <p class="eyebrow"><%= plan["popular"] ? "Most popular" : "Plan" %></p>
+      <h2><%= h(plan["name"]) %></h2>
+      <p class="muted" style="margin-top:8px"><%= h(plan["tagline"]) %></p>
+      <p class="value" style="margin-top:18px"><%= h(plan["price"]) %><small><%= h(plan["period"]) %></small></p>
+      <ul class="stack" style="margin-top:18px;padding-left:18px">
+        <% plan["features"].each do |feature| %>
+          <li><%= h(feature) %></li>
+        <% end %>
+      </ul>
+      <div class="button-inline" style="margin-top:20px">
+        <% if active %>
+          <span class="badge badge-success">Active</span>
+        <% else %>
+          <form method="post" action="/settings/plans">
+            <input type="hidden" name="plan" value="<%= h(plan["id"]) %>">
+            <button class="<%= plan["id"] == "enterprise" ? "button-secondary" : "button" %>" type="submit"><%= plan["id"] == "enterprise" ? "Contact sales" : "Switch plan" %></button>
+          </form>
+        <% end %>
+      </div>
+    </article>
+  <% end %>
+</section>
