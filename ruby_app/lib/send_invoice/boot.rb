@@ -37,6 +37,7 @@ module SendInvoice
       )
 
       server.mount "/assets", WEBrick::HTTPServlet::FileHandler, config.public_path
+      server.mount "/design", WEBrick::HTTPServlet::FileHandler, File.join(config.root, "design")
       server.mount_proc("/") { |req, res| application.handle(req, res) }
 
       trap("INT") { server.shutdown }

@@ -75,3 +75,4 @@ The Ruby app stores shops, orders, sync logs, and UI settings in SQLite at `ruby
 - `Gemfile`, `Rakefile`, and `bin/` provide the primary project workflow.
 - `ruby_app/lib/send_invoice` contains the Ruby app, data layer, sync engine, and Shopify helpers.
 - `ruby_app/views` contains the ERB screens for the admin interface.
+- `design/index.html` contains the standalone UX reference used for the current admin interface.
