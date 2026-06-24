@@ -2,4 +2,7 @@
 
 source "https://rubygems.org"
 
-gem "sqlite3", ">= 1.3", "< 2.0"
+gem "sqlite3", ">= 1.6", "< 3.0"
+gem "minitest"
+gem "rake"
+gem "webrick"

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "bundler/setup"
 require "rake/testtask"
 
 Rake::TestTask.new(:test) do |task|
@@ -9,7 +10,7 @@ end
 
 desc "Start the Send Invoice Ruby app"
 task :server do
-  ruby "app.rb"
+  sh "bundle exec ruby app.rb"
 end
 
 task default: :test

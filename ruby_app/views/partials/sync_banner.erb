@@ -4,16 +4,22 @@
   id="sync-banner"
   class="sync-banner <%= "is-hidden" if hidden %>"
   data-api-path="/api/sync/status"
+  data-async-requests-path="/api/async-requests?status=failed&limit=5"
+  data-async-retry-latest-path="/api/async-requests/retry-latest-failed"
+  data-async-retry-all-path="/api/async-requests/retry-all-failed"
   data-shop-domain="<%= h(@shop && @shop["shop_domain"]) %>"
   data-status="<%= h(@sync_status["status"]) %>"
   data-orders-synced="<%= @sync_status["ordersSynced"] %>"
   data-total-estimated="<%= @sync_status["totalEstimated"] %>"
   data-last-synced-at="<%= h(@sync_status["lastSyncedAt"]) %>"
+  data-queued-at="<%= h(@sync_status["queuedAt"]) %>"
 >
   <div class="sync-copy">
     <strong data-role="status-label">
       <% if @sync_status["status"] == "running" %>
         Syncing orders
+      <% elsif @sync_status["status"] == "queued" %>
+        Sync queued
       <% elsif @sync_status["status"] == "failed" %>
         Sync failed
       <% elsif @sync_status["lastSyncedAt"] %>
@@ -25,6 +31,8 @@
     <span data-role="status-meta">
       <% if @sync_status["status"] == "running" %>
         <%= @sync_status["ordersSynced"] %> of <%= @sync_status["totalEstimated"] %> orders synced
+      <% elsif @sync_status["status"] == "queued" %>
+        Waiting for the background worker to start this sync.
       <% elsif @sync_status["status"] == "failed" %>
         The latest sync did not complete.
       <% else %>
@@ -36,4 +44,18 @@
     <span data-role="progress-bar" style="width:<%= progress %>%"></span>
   </div>
   <span class="sync-progress-value" data-role="progress-value"><%= progress %>%</span>
+  <div class="sync-recovery-panel is-hidden" data-role="async-request-panel">
+    <div class="sync-recovery-header">
+      <div class="sync-recovery-summary">
+        <strong>Failed background requests</strong>
+        <span class="sync-recovery-count" data-role="async-request-count">0 requests</span>
+      </div>
+      <div class="sync-recovery-tools">
+        <button type="button" class="sync-request-button" data-action="retry-latest-failed">Retry latest failed</button>
+        <button type="button" class="sync-request-button" data-action="retry-all-failed">Retry all failed</button>
+      </div>
+    </div>
+    <div class="sync-recovery-list" data-role="async-request-list"></div>
+    <p class="sync-recovery-empty is-hidden" data-role="async-request-empty">No failed background requests remain for this shop.</p>
+  </div>
 </div>

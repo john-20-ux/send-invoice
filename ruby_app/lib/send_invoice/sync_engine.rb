@@ -9,6 +9,8 @@ module SendInvoice
   class SyncEngine
     RATE_LIMIT_SECONDS = 300
     BULK_POLL_SECONDS = 5
+    UNINSTALL_RETENTION_MONTHS = 3
+    UNINSTALL_DELETION_DELAY_SECONDS = 48 * 60 * 60
     FIRST_TIME_MONTHS = 6
     INITIAL_SYNC_DAYS = 3
     MAX_BATCH_ORDERS = 1_000
@@ -30,6 +32,10 @@ module SendInvoice
               displayFinancialStatus
               displayFulfillmentStatus
               lineItems(first: 100) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
                 edges {
                   node {
                     id
@@ -64,6 +70,37 @@ module SendInvoice
                 lastName
                 email
                 phone
+              }
+            }
+          }
+        }
+      }
+    GRAPHQL
+
+    ORDER_LINE_ITEMS_QUERY = <<~GRAPHQL
+      query OrderLineItems($id: ID!, $cursor: String) {
+        order(id: $id) {
+          id
+          lineItems(first: 100, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                sku
+                title
+                variantTitle
+                vendor
+                quantity
+                currentQuantity
+                originalTotalSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                }
               }
             }
           }
@@ -132,10 +169,31 @@ module SendInvoice
       @rate_limits = {}
       @mutex = Mutex.new
       @scheduler_thread = nil
+      @cleanup_thread = nil
     end
 
     def trigger(shop:, type: "incremental", skip_rate_limit: false)
+      return enqueue_sync_request(shop: shop, type: type, skip_rate_limit: skip_rate_limit) if @config.db_queue_backend?
+
+      prepared = prepare_sync_command(shop: shop, type: type, skip_rate_limit: skip_rate_limit)
+      return prepared unless prepared["started"]
+
+      launch_async do
+        run_sync_command(
+          shop: shop,
+          type: type,
+          sync_log_id: prepared.fetch("syncLogId"),
+          last_order_updated_at: prepared["lastOrderUpdatedAt"]
+        )
+      end
+
+      prepared.slice("started", "syncLogId")
+    end
+
+    def prepare_sync_command(shop:, type: "incremental", skip_rate_limit: false)
       shop_domain = shop.fetch("shop_domain")
+      command_key = sync_command_key(type)
+      owner_id = SecureRandom.uuid
       current = @store.latest_sync_log(shop_domain)
       return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
       return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
@@ -144,6 +202,7 @@ module SendInvoice
         limited_for = rate_limited_for(shop_domain)
         return { "started" => false, "message" => "Rate limited. Try again in #{limited_for}s." } if limited_for
       end
+      return { "started" => false, "message" => "Sync already queued or in progress" } unless @store.claim_sync_command_lock(shop_domain, command_key, owner_id: owner_id)
 
       sync_state = type == "incremental" ? @store.sync_state(shop_domain) : nil
       last_order_updated_at = sync_state && sync_state["last_order_updated_at"]
@@ -151,31 +210,77 @@ module SendInvoice
       sync_log = @store.create_sync_log(shop_domain, total_estimated: total_estimated)
       touch_rate_limit(shop_domain) if type == "incremental" && !skip_rate_limit
 
-      Thread.new do
-        Thread.current.abort_on_exception = false
-        begin
-          if @config.mock_mode?
-            run_mock_sync(sync_log["id"], shop_domain, last_order_updated_at, type)
-          else
-            run_shopify_sync(sync_log["id"], shop, last_order_updated_at, type)
-          end
-        rescue StandardError => e
-          @store.fail_sync_log(sync_log["id"], e.message)
-        end
-      end
+      {
+        "started" => true,
+        "syncLogId" => sync_log["id"],
+        "lastOrderUpdatedAt" => last_order_updated_at,
+        "commandKey" => command_key,
+        "lockOwnerId" => owner_id
+      }
+    rescue StandardError
+      @store.release_sync_command_lock(shop_domain, command_key, owner_id: owner_id) if shop_domain && command_key && owner_id
+      raise
+    end
 
-      { "started" => true, "syncLogId" => sync_log["id"] }
+    def run_sync_command(shop:, type:, sync_log_id:, last_order_updated_at: nil, command_key: sync_command_key(type), lock_owner_id: nil)
+      if @config.mock_mode?
+        run_mock_sync(sync_log_id, shop.fetch("shop_domain"), last_order_updated_at, type)
+      else
+        run_shopify_sync(sync_log_id, shop, last_order_updated_at, type)
+      end
+    rescue StandardError => e
+      @store.fail_sync_log(sync_log_id, e.message)
+      raise
+    ensure
+      @store.release_sync_command_lock(shop.fetch("shop_domain"), command_key, owner_id: lock_owner_id) if lock_owner_id
     end
 
     def trigger_bulk(shop:, type: "full")
+      return enqueue_bulk_sync_request(shop: shop, type: type) if @config.db_queue_backend?
+
+      prepared = prepare_bulk_sync_command(shop: shop, type: type)
+      return prepared unless prepared["started"]
+
+      if prepared["mode"] == "mock"
+        launch_async do
+          run_sync_command(
+            shop: shop,
+            type: type,
+            sync_log_id: prepared.fetch("syncLogId"),
+            last_order_updated_at: prepared["lastOrderUpdatedAt"],
+            command_key: prepared["commandKey"],
+            lock_owner_id: prepared["lockOwnerId"]
+          )
+        end
+        return prepared.slice("started", "syncLogId", "mode")
+      end
+
+      launch_async do
+        run_bulk_sync_command(
+          shop: shop,
+          type: type,
+          sync_log_id: prepared.fetch("syncLogId"),
+          bulk_job_id: prepared.fetch("bulkJobId"),
+          command_key: prepared["commandKey"],
+          lock_owner_id: prepared["lockOwnerId"]
+        )
+      end
+
+      prepared.slice("started", "syncLogId", "bulkJobId", "mode")
+    end
+
+    def prepare_bulk_sync_command(shop:, type: "full")
       shop_domain = shop.fetch("shop_domain")
+      command_key = bulk_sync_command_key(type)
+      owner_id = SecureRandom.uuid
       current = @store.latest_sync_log(shop_domain)
       return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
       return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
 
       if @config.mock_mode?
-        return trigger(shop: shop, type: type, skip_rate_limit: true).merge("mode" => "mock")
+        return prepare_sync_command(shop: shop, type: type, skip_rate_limit: true).merge("mode" => "mock")
       end
+      return { "started" => false, "message" => "Bulk sync already queued or in progress" } unless @store.claim_sync_command_lock(shop_domain, command_key, owner_id: owner_id)
 
       sync_log = @store.create_sync_log(shop_domain, total_estimated: 0)
       job = @store.create_bulk_sync_job(shop_domain, {
@@ -184,38 +289,82 @@ module SendInvoice
         "status" => "queued"
       })
 
-      Thread.new do
-        Thread.current.abort_on_exception = false
-        begin
-          run_bulk_sync(job["id"], sync_log["id"], shop, type)
-        rescue StandardError => e
-          handle_bulk_failure(job["id"], sync_log["id"], shop, type, e)
-        end
-      end
+      {
+        "started" => true,
+        "syncLogId" => sync_log["id"],
+        "bulkJobId" => job["id"],
+        "mode" => "bulk",
+        "commandKey" => command_key,
+        "lockOwnerId" => owner_id
+      }
+    rescue StandardError
+      @store.release_sync_command_lock(shop_domain, command_key, owner_id: owner_id) if shop_domain && command_key && owner_id
+      raise
+    end
 
-      { "started" => true, "syncLogId" => sync_log["id"], "bulkJobId" => job["id"], "mode" => "bulk" }
+    def run_bulk_sync_command(shop:, type:, sync_log_id:, bulk_job_id:, command_key: bulk_sync_command_key(type), lock_owner_id: nil)
+      run_bulk_sync(bulk_job_id, sync_log_id, shop, type)
+    rescue StandardError => e
+      handle_bulk_failure(bulk_job_id, sync_log_id, shop, type, e)
+      raise
+    ensure
+      @store.release_sync_command_lock(shop.fetch("shop_domain"), command_key, owner_id: lock_owner_id) if lock_owner_id
     end
 
     def trigger_first_time(shop:)
-      shop_domain = shop.fetch("shop_domain")
-      summary = @store.batch_summary(shop_domain)
+      return enqueue_first_time_sync_request(shop: shop) if @config.db_queue_backend?
 
-      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+      prepared = prepare_first_time_sync_command(shop: shop)
+      return prepared unless prepared["started"]
 
-      sync_log = @store.create_sync_log(shop_domain, total_estimated: 0)
-
-      Thread.new do
-        Thread.current.abort_on_exception = false
-        begin
-          plan_first_time_sync_batches(shop) if summary["totalBatches"].zero?
-          process_first_time_batches(shop, sync_log["id"])
-          @store.complete_sync_log(sync_log["id"], total_estimated: @store.batch_summary(shop_domain)["completedBatches"])
-        rescue StandardError => e
-          @store.fail_sync_log(sync_log["id"], e.message)
-        end
+      launch_async do
+        run_first_time_sync_command(
+          shop: shop,
+          sync_log_id: prepared.fetch("syncLogId"),
+          batches_planned: prepared.fetch("batchesPlanned"),
+          command_key: prepared["commandKey"],
+          lock_owner_id: prepared["lockOwnerId"]
+        )
       end
 
-      { "started" => true, "syncLogId" => sync_log["id"], "mode" => "first_time" }
+      prepared.slice("started", "syncLogId", "mode")
+    end
+
+    def prepare_first_time_sync_command(shop:)
+      shop_domain = shop.fetch("shop_domain")
+      summary = @store.batch_summary(shop_domain)
+      command_key = "orders:first_time"
+      owner_id = SecureRandom.uuid
+      current = @store.latest_sync_log(shop_domain)
+
+      return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+      return { "started" => false, "message" => "First-time sync already queued or in progress" } unless @store.claim_sync_command_lock(shop_domain, command_key, owner_id: owner_id)
+
+      sync_log = @store.create_sync_log(shop_domain, total_estimated: 0)
+      {
+        "started" => true,
+        "syncLogId" => sync_log["id"],
+        "mode" => "first_time",
+        "batchesPlanned" => summary["totalBatches"].positive?,
+        "commandKey" => command_key,
+        "lockOwnerId" => owner_id
+      }
+    rescue StandardError
+      @store.release_sync_command_lock(shop_domain, command_key, owner_id: owner_id) if shop_domain && command_key && owner_id
+      raise
+    end
+
+    def run_first_time_sync_command(shop:, sync_log_id:, batches_planned: false, command_key: "orders:first_time", lock_owner_id: nil)
+      shop_domain = shop.fetch("shop_domain")
+      plan_first_time_sync_batches(shop) unless batches_planned
+      process_first_time_batches(shop, sync_log_id)
+      @store.complete_sync_log(sync_log_id, total_estimated: @store.batch_summary(shop_domain)["completedBatches"])
+    rescue StandardError => e
+      @store.fail_sync_log(sync_log_id, e.message)
+      raise
+    ensure
+      @store.release_sync_command_lock(shop_domain, command_key, owner_id: lock_owner_id) if lock_owner_id
     end
 
     def trigger_all(type: "incremental", skip_rate_limit: false)
@@ -234,6 +383,7 @@ module SendInvoice
     end
 
     def start_scheduler
+      return false if @config.db_queue_backend?
       return false unless @config.auto_sync_enabled
       return false if @scheduler_thread&.alive?
 
@@ -253,11 +403,33 @@ module SendInvoice
       true
     end
 
+    def start_uninstall_cleanup_worker
+      return false if @config.db_queue_backend?
+      return false if @cleanup_thread&.alive?
+
+      @cleanup_thread = Thread.new do
+        Thread.current.abort_on_exception = false
+        loop do
+          begin
+            cleanup_uninstalled_shop_data
+          rescue StandardError => e
+            warn "[send-invoice] uninstall cleanup failed: #{e.class}: #{e.message}"
+          ensure
+            sleep @config.uninstall_cleanup_interval_seconds
+          end
+        end
+      end
+
+      true
+    end
+
     def status(shop_domain)
       latest = @store.latest_sync_log(shop_domain)
       last_completed = @store.last_completed_sync(shop_domain)
       batch_summary = sync_status_batch_summary(shop_domain)
+      queued_request = latest_active_sync_request(shop_domain)
 
+      return queued_status_payload(queued_request, last_completed, batch_summary) if queued_request && queued_request_newer_than_latest?(queued_request, latest)
       return idle_status unless latest
 
       if batch_summary["totalBatches"].positive? && !batch_summary["initialSyncCompleted"]
@@ -280,12 +452,202 @@ module SendInvoice
 
     def bulk_status(shop_domain)
       job = @store.latest_bulk_sync_job(shop_domain)
+      queued_request = latest_active_bulk_request(shop_domain)
+
+      if queued_request && (!job || queued_request_newer_than_reference?(queued_request, job["updated_at"] || job["started_at"]))
+        payload = {
+          "status" => "queued",
+          "requestId" => queued_request["id"],
+          "queuedAt" => queued_request["created_at"],
+          "requestType" => queued_request["request_type"],
+          "syncStatus" => status(shop_domain)
+        }
+        return job ? job.merge(payload) : payload
+      end
+
       return { "status" => "idle" } unless job
 
       job.merge("syncStatus" => status(shop_domain))
     end
 
+    def handle_bulk_finish(shop:, operation_id:)
+      job = @store.bulk_sync_job_by_operation(shop.fetch("shop_domain"), operation_id)
+      return false unless job
+      return true if terminal_or_processing_bulk_status?(job["status"])
+
+      if @config.db_queue_backend?
+        @store.enqueue_async_job_request(
+          shop_domain: shop.fetch("shop_domain"),
+          request_type: "sync.bulk_finish",
+          queue_name: "webhooks",
+          dedupe_key: "sync.bulk_finish:#{job.fetch('id')}",
+          payload: {
+            "shop_domain" => shop.fetch("shop_domain"),
+            "operation_id" => operation_id
+          }
+        )
+        return true
+      end
+
+      launch_async do
+        run_bulk_finish_command(shop: shop, operation_id: operation_id)
+      end
+
+      true
+    end
+
+    def run_bulk_finish_command(shop:, operation_id:)
+      job = @store.bulk_sync_job_by_operation(shop.fetch("shop_domain"), operation_id)
+      return false unless job
+      return true if terminal_or_processing_bulk_status?(job["status"])
+
+      operation = @shopify_client.bulk_operation(
+        shop.fetch("shop_domain"),
+        shop.fetch("access_token"),
+        operation_id
+      )
+      process_finished_bulk_operation(job, shop, operation)
+    rescue StandardError => e
+      handle_bulk_failure(job["id"], job["sync_log_id"], shop, job["sync_type"], e) if job
+      raise
+    end
+
+    def mark_shop_uninstalled(shop_domain)
+      shop = @store.shop(shop_domain)
+      return nil unless shop
+
+      uninstalled_at = Time.now.utc
+      scheduled_for_deletion_at = nil
+      installed_at = parse_time(shop["installed_at"])
+
+      if installed_at && uninstalled_at >= shift_months(installed_at, UNINSTALL_RETENTION_MONTHS)
+        scheduled_for_deletion_at = (uninstalled_at + UNINSTALL_DELETION_DELAY_SECONDS).iso8601
+      end
+
+      @store.mark_shop_uninstalled(
+        shop_domain,
+        uninstalled_at: uninstalled_at.iso8601,
+        scheduled_for_deletion_at: scheduled_for_deletion_at
+      )
+    end
+
+    def cleanup_uninstalled_shop_data(reference_time: Time.now.utc)
+      @store.due_data_deletion_shops(reference_time: reference_time.iso8601).each do |shop|
+        next unless @store.claim_shop_data_deletion(shop.fetch("shop_domain"), claimed_at: reference_time.iso8601)
+
+        begin
+          @store.delete_shop_data(shop.fetch("shop_domain"))
+        rescue StandardError
+          @store.update_shop(shop.fetch("shop_domain"), "data_deletion_started_at" => nil)
+          raise
+        end
+      end
+    end
+
     private
+
+    def enqueue_sync_request(shop:, type:, skip_rate_limit:)
+      shop_domain = shop.fetch("shop_domain")
+      dedupe_key = "sync.#{type}:#{shop_domain}"
+      current = @store.latest_sync_log(shop_domain)
+      return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+      if (existing_request = @store.active_async_job_request_by_dedupe(dedupe_key))
+        return { "started" => false, "message" => "Sync already queued or in progress", "requestId" => existing_request["id"] }
+      end
+
+      if type == "incremental" && !skip_rate_limit
+        limited_for = rate_limited_for(shop_domain)
+        return { "started" => false, "message" => "Rate limited. Try again in #{limited_for}s." } if limited_for
+      end
+
+      request = @store.enqueue_async_job_request(
+        shop_domain: shop_domain,
+        request_type: type.to_s == "full" ? "sync.full" : "sync.incremental",
+        queue_name: "incremental",
+        dedupe_key: dedupe_key,
+        payload: {
+          "shop_domain" => shop_domain,
+          "type" => type,
+          "skip_rate_limit" => skip_rate_limit
+        }
+      )
+      return { "started" => false, "message" => "Sync already queued or in progress", "requestId" => request["id"] } unless request["created"]
+
+      touch_rate_limit(shop_domain) if type == "incremental" && !skip_rate_limit
+      { "started" => true, "mode" => "queued", "requestId" => request["id"] }
+    end
+
+    def enqueue_bulk_sync_request(shop:, type:)
+      shop_domain = shop.fetch("shop_domain")
+      dedupe_key = "sync.bulk_start:#{type}:#{shop_domain}"
+      current = @store.latest_sync_log(shop_domain)
+      return { "started" => false, "message" => "Sync already in progress" } if current && current["status"] == "running"
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+      if (existing_request = @store.active_async_job_request_by_dedupe(dedupe_key))
+        return { "started" => false, "message" => "Bulk sync already queued or in progress", "requestId" => existing_request["id"] }
+      end
+
+      request = @store.enqueue_async_job_request(
+        shop_domain: shop_domain,
+        request_type: "sync.bulk_start",
+        queue_name: "bulk",
+        dedupe_key: dedupe_key,
+        payload: {
+          "shop_domain" => shop_domain,
+          "type" => type
+        }
+      )
+      return { "started" => false, "message" => "Bulk sync already queued or in progress", "requestId" => request["id"] } unless request["created"]
+
+      { "started" => true, "mode" => "queued", "requestId" => request["id"] }
+    end
+
+    def enqueue_first_time_sync_request(shop:)
+      shop_domain = shop.fetch("shop_domain")
+      dedupe_key = "sync.first_time:#{shop_domain}"
+      return { "started" => false, "message" => "Missing Shopify access token" } if !@config.mock_mode? && shop["access_token"].to_s.empty?
+      if (existing_request = @store.active_async_job_request_by_dedupe(dedupe_key))
+        return { "started" => false, "message" => "First-time sync already queued or in progress", "requestId" => existing_request["id"] }
+      end
+
+      request = @store.enqueue_async_job_request(
+        shop_domain: shop_domain,
+        request_type: "sync.first_time",
+        queue_name: "first_time",
+        dedupe_key: dedupe_key,
+        payload: {
+          "shop_domain" => shop_domain
+        }
+      )
+      return { "started" => false, "message" => "First-time sync already queued or in progress", "requestId" => request["id"] } unless request["created"]
+
+      { "started" => true, "mode" => "queued", "requestId" => request["id"] }
+    end
+
+    def launch_async(&block)
+      Thread.new do
+        Thread.current.abort_on_exception = false
+        Thread.current.report_on_exception = false if Thread.current.respond_to?(:report_on_exception=)
+        block.call
+      end
+    end
+
+    def sync_command_key(type)
+      type.to_s == "full" ? "orders:full" : "orders:incremental"
+    end
+
+    def bulk_sync_command_key(type)
+      "bulk:#{type}"
+    end
+
+    def parse_time(value)
+      return nil if value.to_s.empty?
+
+      Time.parse(value.to_s).utc
+    rescue ArgumentError
+      nil
+    end
 
     def sync_status_payload(latest, last_completed)
       {
@@ -296,6 +658,48 @@ module SendInvoice
         "finishedAt" => latest["finished_at"],
         "lastSyncedAt" => last_completed && last_completed["finished_at"]
       }
+    end
+
+    def queued_status_payload(queued_request, last_completed, batch_summary)
+      idle_status.merge(batch_summary).merge(
+        "status" => "queued",
+        "queuedAt" => async_request_queue_reference_time(queued_request),
+        "queuedType" => queued_request["request_type"],
+        "requestId" => queued_request["id"],
+        "lastSyncedAt" => last_completed && last_completed["finished_at"]
+      )
+    end
+
+    def latest_active_sync_request(shop_domain)
+      @store.latest_active_async_job_request(
+        shop_domain,
+        request_types: %w[sync.incremental sync.full sync.first_time]
+      )
+    end
+
+    def latest_active_bulk_request(shop_domain)
+      @store.latest_active_async_job_request(
+        shop_domain,
+        request_types: %w[sync.bulk_start sync.bulk_finish]
+      )
+    end
+
+    def queued_request_newer_than_latest?(queued_request, latest)
+      return true unless latest
+
+      queued_request_newer_than_reference?(queued_request, latest["started_at"])
+    end
+
+    def queued_request_newer_than_reference?(queued_request, reference_time)
+      queued_at = parse_time(async_request_queue_reference_time(queued_request))
+      reference = parse_time(reference_time)
+      return true unless reference
+
+      queued_at && queued_at >= reference
+    end
+
+    def async_request_queue_reference_time(queued_request)
+      queued_request["updated_at"] || queued_request["created_at"]
     end
 
     def sync_status_batch_summary(shop_domain)
@@ -583,6 +987,7 @@ module SendInvoice
           remaining = max_orders ? max_orders - synced : nodes.length
           nodes = nodes.first(remaining) if max_orders
 
+          nodes = nodes.map { |node| complete_order_line_items(shop, node) }
           orders = nodes.map { |node| map_order_node(node, shop.fetch("shop_domain")) }
           @store.upsert_orders(orders)
           highest_order_updated_at = [highest_order_updated_at, max_order_updated_at(orders)].compact.max
@@ -642,6 +1047,45 @@ module SendInvoice
       orders
     end
 
+    def complete_order_line_items(shop, node)
+      connection = node["lineItems"] || {}
+      page_info = connection["pageInfo"] || {}
+      return node unless page_info["hasNextPage"]
+
+      edges = Array(connection["edges"]).dup
+      cursor = page_info["endCursor"]
+
+      loop do
+        data = @shopify_client.graph_ql(
+          shop.fetch("shop_domain"),
+          shop.fetch("access_token"),
+          ORDER_LINE_ITEMS_QUERY,
+          {
+            "id" => node.fetch("id"),
+            "cursor" => cursor
+          }
+        )
+
+        order = data.fetch("order")
+        line_items = order.fetch("lineItems", {})
+        edges.concat(Array(line_items["edges"]))
+        page_info = line_items["pageInfo"] || {}
+        break unless page_info["hasNextPage"]
+
+        cursor = page_info["endCursor"]
+      end
+
+      node.merge(
+        "lineItems" => {
+          "edges" => edges,
+          "pageInfo" => {
+            "hasNextPage" => false,
+            "endCursor" => cursor
+          }
+        }
+      )
+    end
+
     def run_bulk_sync(job_id, sync_log_id, shop, sync_type)
       query = bulk_orders_query(shop.fetch("shop_domain"), sync_type)
       operation = @shopify_client.start_bulk_query(shop.fetch("shop_domain"), shop.fetch("access_token"), query)
@@ -649,32 +1093,23 @@ module SendInvoice
 
       @store.update_bulk_sync_job(job_id, {
         "shopify_bulk_operation_id" => operation_id,
-        "status" => normalize_bulk_status(operation["status"])
+        "status" => normalize_bulk_status(operation["status"]) == "completed" ? "running" : normalize_bulk_status(operation["status"])
       })
 
       loop do
         operation = @shopify_client.bulk_operation(shop.fetch("shop_domain"), shop.fetch("access_token"), operation_id)
         status = normalize_bulk_status(operation["status"])
-        @store.update_bulk_sync_job(job_id, bulk_operation_attributes(operation).merge("status" => status))
+        attributes = bulk_operation_attributes(operation)
+        attributes["status"] = status unless status == "completed"
+        @store.update_bulk_sync_job(job_id, attributes)
 
         case status
         when "completed"
-          url = operation["url"] || operation["partialDataUrl"]
-          raise "Shopify bulk operation completed without a result URL" if url.to_s.empty?
-
-          @store.update_bulk_sync_job(job_id, "status" => "downloading")
-          result = import_bulk_result(url, shop.fetch("shop_domain"), sync_log_id, job_id)
-          @store.complete_sync_log(sync_log_id, total_estimated: result["imported_count"])
-          @store.upsert_sync_state(shop.fetch("shop_domain"), {
-            "last_order_updated_at" => result["last_order_updated_at"],
-            "last_cursor" => nil,
-            "last_sync_type" => "bulk_#{sync_type}"
-          })
-          @store.update_bulk_sync_job(job_id, {
-            "status" => "completed",
-            "imported_count" => result["imported_count"],
-            "completed_at" => Time.now.utc.iso8601
-          })
+          process_finished_bulk_operation(
+            @store.bulk_sync_job(job_id),
+            shop,
+            operation
+          )
           break
         when "failed", "canceled", "expired"
           raise "Shopify bulk operation #{status}: #{operation['errorCode']}"
@@ -682,6 +1117,38 @@ module SendInvoice
           sleep BULK_POLL_SECONDS
         end
       end
+    end
+
+    def process_finished_bulk_operation(job, shop, operation)
+      status = normalize_bulk_status(operation["status"])
+      if status != "completed"
+        raise "Shopify bulk operation #{status}: #{operation['errorCode']}"
+      end
+
+      claimed = @store.claim_bulk_sync_job(
+        job.fetch("id"),
+        from_statuses: %w[queued created running],
+        status: "downloading"
+      )
+      return false unless claimed
+
+      @store.update_bulk_sync_job(job["id"], bulk_operation_attributes(operation))
+      url = operation["url"] || operation["partialDataUrl"]
+      raise "Shopify bulk operation completed without a result URL" if url.to_s.empty?
+
+      result = import_bulk_result(url, shop.fetch("shop_domain"), job.fetch("sync_log_id"), job.fetch("id"))
+      @store.complete_sync_log(job["sync_log_id"], total_estimated: result["imported_count"])
+      @store.upsert_sync_state(shop.fetch("shop_domain"), {
+        "last_order_updated_at" => result["last_order_updated_at"],
+        "last_cursor" => nil,
+        "last_sync_type" => "bulk_#{job.fetch('sync_type')}"
+      })
+      @store.update_bulk_sync_job(job["id"], {
+        "status" => "completed",
+        "imported_count" => result["imported_count"],
+        "completed_at" => Time.now.utc.iso8601
+      })
+      true
     end
 
     def import_bulk_result(url, shop_domain, sync_log_id, job_id)
@@ -796,6 +1263,13 @@ module SendInvoice
 
     def normalize_bulk_status(status)
       status.to_s.downcase
+    end
+
+    def terminal_or_processing_bulk_status?(status)
+      %w[
+        downloading importing completed failed canceled expired
+        fallback_running fallback_completed fallback_failed
+      ].include?(status.to_s)
     end
 
     def map_order_node(node, shop_domain)

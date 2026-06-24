@@ -1,0 +1,42 @@
+<%
+queue_adapter = case ENV.fetch("SEND_INVOICE_QUEUE_DB_ADAPTER", "sqlite3")
+                when "postgres", "postgresql", "pg"
+                  "postgresql"
+                else
+                  "sqlite3"
+                end
+sqlite_development = queue_adapter == "sqlite3"
+enable_incremental_syncs = !sqlite_development || ENV["SEND_INVOICE_ENABLE_INCREMENTAL_SYNC_RECURRING"] == "1"
+enable_uninstall_cleanup = !sqlite_development || ENV["SEND_INVOICE_ENABLE_UNINSTALL_CLEANUP_RECURRING"] == "1"
+%>
+development:
+  drain_app_job_requests:
+    class: "SendInvoiceWorker::DrainAppJobRequestsJob"
+    queue: maintenance
+    schedule: every 5 seconds
+<% if enable_incremental_syncs %>
+  enqueue_incremental_syncs:
+    class: "SendInvoiceWorker::EnqueueIncrementalSyncsJob"
+    queue: maintenance
+    schedule: every 15 minutes
+<% end %>
+<% if enable_uninstall_cleanup %>
+  cleanup_uninstalled_shops:
+    class: "SendInvoiceWorker::CleanupUninstalledShopsJob"
+    queue: maintenance
+    schedule: every 17 minutes
+<% end %>
+
+production:
+  drain_app_job_requests:
+    class: "SendInvoiceWorker::DrainAppJobRequestsJob"
+    queue: maintenance
+    schedule: every 5 seconds
+  enqueue_incremental_syncs:
+    class: "SendInvoiceWorker::EnqueueIncrementalSyncsJob"
+    queue: maintenance
+    schedule: every 5 minutes
+  cleanup_uninstalled_shops:
+    class: "SendInvoiceWorker::CleanupUninstalledShopsJob"
+    queue: maintenance
+    schedule: every 5 minutes

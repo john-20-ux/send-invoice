@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SIDECAR_DIR="$ROOT_DIR/worker_sidecar"
+
+normalize_queue_adapter() {
+  case "${1:-sqlite3}" in
+    postgresql|postgres|pg)
+      printf 'postgresql\n'
+      ;;
+    ""|sqlite|sqlite3)
+      printf 'sqlite3\n'
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+validate_postgres_queue_env() {
+  if [[ -n "${SEND_INVOICE_QUEUE_DATABASE_URL:-}" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${SEND_INVOICE_QUEUE_DB_NAME:-}" ]]; then
+    echo "Postgres queue mode requires SEND_INVOICE_QUEUE_DATABASE_URL or SEND_INVOICE_QUEUE_DB_NAME"
+    return 1
+  fi
+}
+
+if command -v brew >/dev/null 2>&1; then
+  if ruby_prefix="$(brew --prefix ruby@3.2 2>/dev/null)"; then
+    export PATH="$ruby_prefix/bin:$PATH"
+  fi
+fi
+
+cd "$SIDECAR_DIR"
+
+required_ruby="3.1.6"
+current_ruby="$(ruby -e 'print RUBY_VERSION')"
+
+ruby -e 'exit Gem::Version.new(RUBY_VERSION) >= Gem::Version.new(ARGV[0]) ? 0 : 1' "$required_ruby" || {
+  echo "worker_sidecar requires Ruby $required_ruby or newer. Current Ruby: $current_ruby"
+  echo "Use a Ruby 3.1.6+ shell, then rerun bin/setup-worker-sidecar"
+  exit 1
+}
+
+if ! command -v bundle >/dev/null 2>&1; then
+  echo "Bundler is required"
+  exit 1
+fi
+
+export BUNDLE_USER_HOME="${BUNDLE_USER_HOME:-$SIDECAR_DIR/.bundle/home}"
+export BUNDLE_USER_CACHE="${BUNDLE_USER_CACHE:-$SIDECAR_DIR/.bundle/cache}"
+export BUNDLE_USER_CONFIG="${BUNDLE_USER_CONFIG:-$SIDECAR_DIR/.bundle/config}"
+export SEND_INVOICE_DATABASE_PATH="${SEND_INVOICE_DATABASE_PATH:-$ROOT_DIR/ruby_app/db/send_invoice.sqlite3}"
+export RAILS_ENV="${RAILS_ENV:-development}"
+export SEND_INVOICE_QUEUE_DB_ADAPTER="$(normalize_queue_adapter "${SEND_INVOICE_QUEUE_DB_ADAPTER:-sqlite3}")"
+
+if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+  export SEND_INVOICE_QUEUE_DATABASE_PATH="${SEND_INVOICE_QUEUE_DATABASE_PATH:-$SIDECAR_DIR/storage/development_queue.sqlite3}"
+else
+  validate_postgres_queue_env
+fi
+
+bundle config --local path vendor/bundle
+bundle install
+
+if [[ ! -x "$SIDECAR_DIR/bin/jobs" ]]; then
+  bundle exec rails solid_queue:install
+fi
+
+bundle exec rails db:prepare
+
+echo "worker_sidecar setup complete"
+echo "SEND_INVOICE_QUEUE_DB_ADAPTER=$SEND_INVOICE_QUEUE_DB_ADAPTER"
+echo "SEND_INVOICE_DATABASE_PATH=$SEND_INVOICE_DATABASE_PATH"
+if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+  echo "SEND_INVOICE_QUEUE_DATABASE_PATH=$SEND_INVOICE_QUEUE_DATABASE_PATH"
+else
+  echo "SEND_INVOICE_QUEUE_DATABASE_URL=${SEND_INVOICE_QUEUE_DATABASE_URL:+set}"
+  echo "SEND_INVOICE_QUEUE_DB_HOST=${SEND_INVOICE_QUEUE_DB_HOST:-127.0.0.1}"
+  echo "SEND_INVOICE_QUEUE_DB_PORT=${SEND_INVOICE_QUEUE_DB_PORT:-5432}"
+  echo "SEND_INVOICE_QUEUE_DB_NAME=${SEND_INVOICE_QUEUE_DB_NAME:-}"
+  echo "SEND_INVOICE_QUEUE_DB_USER=${SEND_INVOICE_QUEUE_DB_USER:-}"
+fi

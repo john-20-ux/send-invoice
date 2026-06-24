@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATABASE_PATH="${DATABASE_PATH:-$ROOT_DIR/ruby_app/db/send_invoice.sqlite3}"
+ARGUMENT="${1:-}"
+
+if [[ -z "$ARGUMENT" ]]; then
+  echo "Usage:"
+  echo "  bin/retry-async-request REQUEST_ID"
+  echo "  bin/retry-async-request --latest-failed"
+  echo "  bin/retry-async-request --all-failed"
+  exit 1
+fi
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "sqlite3 is required for bin/retry-async-request"
+  exit 1
+fi
+
+if [[ ! -f "$DATABASE_PATH" ]]; then
+  echo "Database not found: $DATABASE_PATH"
+  exit 1
+fi
+
+timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+retry_one() {
+  local request_id="$1"
+  local changes
+
+  changes="$(sqlite3 "$DATABASE_PATH" <<SQL
+UPDATE async_job_requests
+SET status = 'queued',
+    claimed_by = NULL,
+    claimed_at = NULL,
+    dispatched_at = NULL,
+    error_message = NULL,
+    available_at = '$timestamp',
+    updated_at = '$timestamp'
+WHERE id = '$request_id'
+  AND status = 'failed';
+SELECT changes();
+SQL
+)"
+
+  if [[ "${changes##*$'\n'}" != "1" ]]; then
+    echo "Failed async job request not retried: $request_id"
+    exit 1
+  fi
+
+  echo "Retried async job request $request_id"
+}
+
+case "$ARGUMENT" in
+  --latest-failed)
+    request_id="$(sqlite3 "$DATABASE_PATH" "SELECT id FROM async_job_requests WHERE status = 'failed' ORDER BY created_at DESC, rowid DESC LIMIT 1;")"
+    [[ -n "$request_id" ]] || { echo "No failed async job requests found"; exit 1; }
+    retry_one "$request_id"
+    ;;
+  --all-failed)
+    count="$(sqlite3 "$DATABASE_PATH" "SELECT COUNT(*) FROM async_job_requests WHERE status = 'failed';")"
+    [[ "$count" != "0" ]] || { echo "No failed async job requests found"; exit 1; }
+    sqlite3 "$DATABASE_PATH" <<SQL
+UPDATE async_job_requests
+SET status = 'queued',
+    claimed_by = NULL,
+    claimed_at = NULL,
+    dispatched_at = NULL,
+    error_message = NULL,
+    available_at = '$timestamp',
+    updated_at = '$timestamp'
+WHERE status = 'failed';
+SQL
+    echo "Retried $count failed async job request(s)"
+    ;;
+  *)
+    retry_one "$ARGUMENT"
+    ;;
+esac

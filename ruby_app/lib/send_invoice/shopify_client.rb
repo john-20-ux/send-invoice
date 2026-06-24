@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "base64"
 require "net/http"
 require "openssl"
 require "securerandom"
@@ -38,6 +39,16 @@ module SendInvoice
       message = params.keys.sort.map { |key| "#{key}=#{params[key]}" }.join("&")
       digest = OpenSSL::HMAC.hexdigest("sha256", @config.shopify_api_secret, message)
       secure_compare(provided, digest)
+    end
+
+    def verify_webhook_hmac(raw_body, provided_hmac)
+      return false if provided_hmac.to_s.empty?
+
+      digest = OpenSSL::HMAC.digest("sha256", @config.shopify_api_secret, raw_body.to_s)
+      provided = Base64.strict_decode64(provided_hmac.to_s)
+      secure_compare(provided, digest)
+    rescue ArgumentError
+      false
     end
 
     def exchange_token(shop, code)
@@ -125,6 +136,61 @@ module SendInvoice
       data.fetch("ordersCount").fetch("count").to_i
     end
 
+    def ensure_webhook_subscription(shop, access_token, topic:, uri:)
+      data = graph_ql(shop, access_token, <<~GRAPHQL, { "topics" => [topic] })
+        query WebhookSubscriptions($topics: [WebhookSubscriptionTopic!]) {
+          webhookSubscriptions(first: 50, topics: $topics) {
+            nodes {
+              id
+              topic
+              uri
+            }
+          }
+        }
+      GRAPHQL
+
+      existing = data.fetch("webhookSubscriptions").fetch("nodes", []).find do |subscription|
+        subscription["topic"] == topic && subscription["uri"] == uri
+      end
+      return existing if existing
+
+      stale = data.fetch("webhookSubscriptions").fetch("nodes", []).find do |subscription|
+        subscription["topic"] == topic
+      end
+      return update_webhook_subscription(shop, access_token, stale.fetch("id"), uri) if stale
+
+      variables = {
+        "topic" => topic,
+        "subscription" => { "uri" => uri, "format" => "JSON" }
+      }
+      data = graph_ql(shop, access_token, <<~GRAPHQL, variables)
+        mutation CreateWebhookSubscription(
+          $topic: WebhookSubscriptionTopic!,
+          $subscription: WebhookSubscriptionInput!
+        ) {
+          webhookSubscriptionCreate(topic: $topic, webhookSubscription: $subscription) {
+            webhookSubscription {
+              id
+              topic
+              uri
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      GRAPHQL
+
+      result = data.fetch("webhookSubscriptionCreate")
+      errors = result.fetch("userErrors", [])
+      unless errors.empty?
+        raise "Shopify webhook subscription error: #{errors.map { |error| error['message'] }.join(', ')}"
+      end
+
+      result.fetch("webhookSubscription")
+    end
+
     def stream_bulk_result(url)
       uri = URI(url)
       buffer = +""
@@ -151,6 +217,39 @@ module SendInvoice
     end
 
     private
+
+    def update_webhook_subscription(shop, access_token, subscription_id, uri)
+      variables = {
+        "id" => subscription_id,
+        "subscription" => { "uri" => uri, "format" => "JSON" }
+      }
+      data = graph_ql(shop, access_token, <<~GRAPHQL, variables)
+        mutation UpdateWebhookSubscription(
+          $id: ID!,
+          $subscription: WebhookSubscriptionInput!
+        ) {
+          webhookSubscriptionUpdate(id: $id, webhookSubscription: $subscription) {
+            webhookSubscription {
+              id
+              topic
+              uri
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      GRAPHQL
+
+      result = data.fetch("webhookSubscriptionUpdate")
+      errors = result.fetch("userErrors", [])
+      unless errors.empty?
+        raise "Shopify webhook subscription update error: #{errors.map { |error| error['message'] }.join(', ')}"
+      end
+
+      result.fetch("webhookSubscription")
+    end
 
     def post_json(uri, payload, access_token: nil)
       request = Net::HTTP::Post.new(uri)

@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/bin/phase4-common.sh"
+DATABASE_PATH="${DATABASE_PATH:-$ROOT_DIR/ruby_app/db/send_invoice.sqlite3}"
+ASYNC_REQUEST_MAX_ATTEMPTS="${ASYNC_REQUEST_MAX_ATTEMPTS:-5}"
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "sqlite3 is required for bin/phase4-status"
+  exit 1
+fi
+
+if [[ ! -f "$DATABASE_PATH" ]]; then
+  echo "Database not found: $DATABASE_PATH"
+  exit 1
+fi
+
+echo "DATABASE_PATH=$DATABASE_PATH"
+echo "ASYNC_REQUEST_MAX_ATTEMPTS=$ASYNC_REQUEST_MAX_ATTEMPTS"
+echo "QUEUE_ADAPTER=$(phase4_queue_db_adapter)"
+if ! phase4_assert_queue_db_available; then
+  exit 1
+fi
+if phase4_sidecar_health_ok; then
+  echo "$PHASE4_SIDECAR_HEALTH_SUMMARY"
+  if [[ -n "${PHASE4_HEALTH_WARNING:-}" ]]; then
+    echo "Warning: $PHASE4_HEALTH_WARNING"
+  fi
+else
+  echo "Sidecar health unavailable: ${PHASE4_HEALTH_ERROR:-unknown error}"
+fi
+
+echo
+echo "[sidecar processes]"
+case "$(phase4_queue_db_adapter)" in
+  sqlite3)
+    sqlite3 "$(phase4_queue_database_path)" <<'SQL'
+.headers on
+.mode column
+SELECT
+  id,
+  kind,
+  name,
+  pid,
+  hostname,
+  CASE
+    WHEN CAST(strftime('%s', 'now') - strftime('%s', last_heartbeat_at) AS INTEGER) < 0 THEN 0
+    ELSE CAST(strftime('%s', 'now') - strftime('%s', last_heartbeat_at) AS INTEGER)
+  END AS heartbeat_age_seconds,
+  last_heartbeat_at
+FROM solid_queue_processes
+ORDER BY last_heartbeat_at DESC, id DESC;
+SQL
+    ;;
+  postgresql)
+    echo "Use direct psql inspection for sidecar process rows in Postgres queue mode."
+    ;;
+esac
+
+echo
+echo "[queue failures]"
+case "$(phase4_queue_db_adapter)" in
+  sqlite3)
+    sqlite3 "$(phase4_queue_database_path)" <<'SQL'
+.headers on
+.mode column
+SELECT
+  failed.id,
+  jobs.queue_name,
+  jobs.class_name,
+  failed.created_at,
+  CASE
+    WHEN LOWER(COALESCE(failed.error, '')) LIKE '%database is locked%' THEN 'yes'
+    ELSE ''
+  END AS locked,
+  COALESCE(
+    CASE
+      WHEN json_valid(failed.error) THEN json_extract(failed.error, '$.exception_class')
+      ELSE NULL
+    END,
+    ''
+  ) AS exception_class,
+  substr(
+    COALESCE(
+      CASE
+        WHEN json_valid(failed.error) THEN json_extract(failed.error, '$.message')
+        ELSE NULL
+      END,
+      failed.error,
+      ''
+    ),
+    1,
+    180
+  ) AS error_excerpt
+FROM solid_queue_failed_executions AS failed
+JOIN solid_queue_jobs AS jobs ON jobs.id = failed.job_id
+ORDER BY failed.created_at DESC, failed.id DESC
+LIMIT 10;
+SQL
+    ;;
+  postgresql)
+    echo "Use direct psql inspection for failed queue executions in Postgres queue mode."
+    ;;
+esac
+
+echo
+echo "[queue failure classes]"
+case "$(phase4_queue_db_adapter)" in
+  sqlite3)
+    sqlite3 "$(phase4_queue_database_path)" <<'SQL'
+.headers on
+.mode column
+SELECT
+  COALESCE(
+    CASE
+      WHEN json_valid(error) THEN json_extract(error, '$.exception_class')
+      ELSE NULL
+    END,
+    '(unknown)'
+  ) AS exception_class,
+  SUM(CASE WHEN LOWER(COALESCE(error, '')) LIKE '%database is locked%' THEN 1 ELSE 0 END) AS lock_failures,
+  COUNT(*) AS total_failures,
+  MAX(created_at) AS latest_failure_at
+FROM solid_queue_failed_executions
+GROUP BY 1
+ORDER BY total_failures DESC, latest_failure_at DESC
+LIMIT 10;
+SQL
+    ;;
+  postgresql)
+    echo "Use direct psql inspection for failure-class summary in Postgres queue mode."
+    ;;
+esac
+
+echo
+echo "[lock failure summary]"
+case "$(phase4_queue_db_adapter)" in
+  sqlite3)
+    sqlite3 "$(phase4_queue_database_path)" <<'SQL'
+.headers on
+.mode column
+SELECT
+  COUNT(*) AS total_failed_executions,
+  SUM(CASE WHEN LOWER(COALESCE(error, '')) LIKE '%database is locked%' THEN 1 ELSE 0 END) AS database_locked_failures
+FROM solid_queue_failed_executions;
+SQL
+    ;;
+  postgresql)
+    echo "Use direct psql inspection for lock failure summary in Postgres queue mode."
+    ;;
+esac
+
+echo
+echo "[async_job_requests]"
+sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT
+  status,
+  COUNT(*) AS count,
+  SUM(CASE WHEN status = 'queued' AND error_message IS NOT NULL THEN 1 ELSE 0 END) AS waiting_retry
+FROM async_job_requests
+GROUP BY status
+ORDER BY status;
+SQL
+
+echo
+echo "[latest async requests]"
+sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT
+  id,
+  shop_domain,
+  request_type,
+  queue_name,
+  status,
+  printf('%d/%d', attempts, $ASYNC_REQUEST_MAX_ATTEMPTS) AS retries,
+  CASE
+    WHEN status = 'queued' AND error_message IS NOT NULL THEN available_at
+    ELSE NULL
+  END AS next_retry_at,
+  CASE
+    WHEN status = 'queued' AND error_message IS NOT NULL
+      THEN MAX(CAST(strftime('%s', available_at) - strftime('%s', 'now') AS INTEGER), 0)
+    ELSE NULL
+  END AS retry_in_seconds,
+  created_at,
+  dispatched_at,
+  error_message
+FROM async_job_requests
+ORDER BY created_at DESC
+LIMIT 10;
+SQL
+
+echo
+echo "[retry backlog]"
+sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT
+  id,
+  shop_domain,
+  request_type,
+  status,
+  printf('%d/%d', attempts, $ASYNC_REQUEST_MAX_ATTEMPTS) AS retries,
+  CASE
+    WHEN status = 'queued' AND error_message IS NOT NULL THEN available_at
+    ELSE NULL
+  END AS next_retry_at,
+  CASE
+    WHEN status = 'queued' AND error_message IS NOT NULL
+      THEN MAX(CAST(strftime('%s', available_at) - strftime('%s', 'now') AS INTEGER), 0)
+    ELSE NULL
+  END AS retry_in_seconds,
+  error_message
+FROM async_job_requests
+WHERE (status = 'queued' AND error_message IS NOT NULL) OR status = 'failed'
+ORDER BY updated_at DESC, created_at DESC
+LIMIT 10;
+SQL
+
+echo
+echo "[latest sync logs]"
+sqlite3 "$DATABASE_PATH" <<'SQL'
+.headers on
+.mode column
+SELECT id, shop_domain, status, orders_synced, total_estimated, started_at, finished_at
+FROM sync_logs
+ORDER BY started_at DESC
+LIMIT 10;
+SQL

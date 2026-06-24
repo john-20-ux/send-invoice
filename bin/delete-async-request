@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATABASE_PATH="${DATABASE_PATH:-$ROOT_DIR/ruby_app/db/send_invoice.sqlite3}"
+REQUEST_ID="${1:-}"
+
+if [[ -z "$REQUEST_ID" ]]; then
+  echo "Usage: bin/delete-async-request REQUEST_ID"
+  exit 1
+fi
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "sqlite3 is required for bin/delete-async-request"
+  exit 1
+fi
+
+if [[ ! -f "$DATABASE_PATH" ]]; then
+  echo "Database not found: $DATABASE_PATH"
+  exit 1
+fi
+
+changes="$(sqlite3 "$DATABASE_PATH" <<SQL
+DELETE FROM async_job_requests
+WHERE id = '$REQUEST_ID'
+  AND status IN ('failed', 'completed');
+SELECT changes();
+SQL
+)"
+
+if [[ "${changes##*$'\n'}" != "1" ]]; then
+  echo "Async job request not deleted: $REQUEST_ID"
+  exit 1
+fi
+
+echo "Deleted async job request $REQUEST_ID"

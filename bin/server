@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ruby app.rb
+exec bundle exec ruby app.rb

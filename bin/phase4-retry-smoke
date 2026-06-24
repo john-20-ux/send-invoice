@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/bin/phase4-common.sh"
+
+DATABASE_PATH="${DATABASE_PATH:-$(phase4_app_database_path)}"
+APP_URL="${APP_URL:-$(phase4_app_url)}"
+SHOP_DOMAIN="${SHOP_DOMAIN:-demo-store.myshopify.com}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-1}"
+FORCE_DRAIN_WITH_RAILS="${FORCE_DRAIN_WITH_RAILS:-0}"
+KEEP_FAILED_RETRY_SMOKE="${KEEP_FAILED_RETRY_SMOKE:-0}"
+
+REQUEST_ID=""
+REQUEST_DID_SUCCEED=0
+
+cleanup_request() {
+  local escaped_request_id exists changes
+
+  if [[ -z "$REQUEST_ID" ]]; then
+    return 0
+  fi
+
+  if [[ "$REQUEST_DID_SUCCEED" -ne 1 && "$KEEP_FAILED_RETRY_SMOKE" == "1" ]]; then
+    echo "Preserving synthetic request for debugging: $REQUEST_ID"
+    return 0
+  fi
+
+  escaped_request_id="$(phase4_sql_escape "$REQUEST_ID")"
+  exists="$(sqlite3 "$DATABASE_PATH" "SELECT COUNT(*) FROM async_job_requests WHERE id = '$escaped_request_id';")"
+  if [[ "$exists" == "0" ]]; then
+    return 0
+  fi
+
+  changes="$(sqlite3 "$DATABASE_PATH" <<SQL
+DELETE FROM async_job_requests
+WHERE id = '$escaped_request_id';
+SELECT changes();
+SQL
+)"
+
+  if [[ "${changes##*$'\n'}" != "1" ]]; then
+    echo "Failed to clean up synthetic retry smoke request: $REQUEST_ID"
+    return 1
+  fi
+
+  echo "Cleaned up synthetic retry smoke request: $REQUEST_ID"
+}
+
+trap 'phase4_retry_smoke_status=$?; if ! cleanup_request; then phase4_retry_smoke_status=1; fi; exit "$phase4_retry_smoke_status"' EXIT
+
+phase4_require_commands curl sqlite3 /usr/bin/ruby
+phase4_assert_app_database_exists
+phase4_assert_queue_db_available
+if ! phase4_health_gate; then
+  echo "Phase 4 health gate failed: ${PHASE4_HEALTH_ERROR:-unknown error}"
+  exit 1
+fi
+if ! phase4_abort_on_duplicate_sidecars "Phase 4 retry smoke"; then
+  exit 1
+fi
+
+shop_exists="$(sqlite3 "$DATABASE_PATH" "SELECT COUNT(*) FROM shops WHERE shop_domain = '$(phase4_sql_escape "$SHOP_DOMAIN")';")"
+if [[ "$shop_exists" == "0" ]]; then
+  echo "Shop not found for retry smoke: $SHOP_DOMAIN"
+  exit 1
+fi
+
+REQUEST_ID="$(
+  /usr/bin/ruby -rsecurerandom -e 'print SecureRandom.uuid'
+)"
+DEDUPE_KEY="phase4-retry-smoke-$REQUEST_ID"
+now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+echo "Starting Phase 4 retry smoke"
+echo "APP_URL=$APP_URL"
+echo "SHOP_DOMAIN=$SHOP_DOMAIN"
+echo "DATABASE_PATH=$DATABASE_PATH"
+echo "QUEUE_ADAPTER=$(phase4_queue_db_adapter)"
+echo "$PHASE4_SIDECAR_HEALTH_SUMMARY"
+if [[ -n "${PHASE4_HEALTH_WARNING:-}" ]]; then
+  echo "Warning: $PHASE4_HEALTH_WARNING"
+fi
+
+sqlite3 "$DATABASE_PATH" <<SQL
+INSERT INTO async_job_requests (
+  id,
+  shop_domain,
+  request_type,
+  queue_name,
+  dedupe_key,
+  payload,
+  status,
+  attempts,
+  available_at,
+  created_at,
+  updated_at
+) VALUES (
+  '$(phase4_sql_escape "$REQUEST_ID")',
+  '$(phase4_sql_escape "$SHOP_DOMAIN")',
+  'sync.unsupported',
+  'maintenance',
+  '$(phase4_sql_escape "$DEDUPE_KEY")',
+  '{}',
+  'queued',
+  0,
+  '$now_utc',
+  '$now_utc',
+  '$now_utc'
+);
+SQL
+
+echo "Inserted synthetic async request: $REQUEST_ID"
+
+if [[ "$FORCE_DRAIN_WITH_RAILS" == "1" ]]; then
+  echo "Forcing one drain cycle with Rails runner"
+  (
+    cd "$(phase4_worker_sidecar_dir)"
+    if command -v brew >/dev/null 2>&1; then
+      ruby_prefix="$(brew --prefix ruby@3.2 2>/dev/null || true)"
+      if [[ -n "$ruby_prefix" ]]; then
+        export PATH="$ruby_prefix/bin:$PATH"
+      fi
+    fi
+    ./bin/rails runner "SendInvoiceWorker::DrainAppJobRequestsJob.perform_now"
+  )
+fi
+
+deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+unsupported_message="Unsupported async job request type: sync.unsupported"
+
+while (( $(date +%s) <= deadline )); do
+  row="$(
+    sqlite3 -readonly -separator '|' "$DATABASE_PATH" \
+      "SELECT status, attempts, COALESCE(available_at, ''), COALESCE(error_message, ''), COALESCE(updated_at, '') FROM async_job_requests WHERE id = '$(phase4_sql_escape "$REQUEST_ID")' LIMIT 1;"
+  )"
+
+  if [[ -z "$row" ]]; then
+    echo "Synthetic retry smoke request disappeared unexpectedly: $REQUEST_ID"
+    "$ROOT_DIR/bin/phase4-status"
+    exit 1
+  fi
+
+  IFS='|' read -r status attempts available_at error_message updated_at <<<"$row"
+  echo "request status=$status attempts=$attempts available_at=${available_at:-n/a} updated_at=${updated_at:-n/a}"
+
+  if [[ "$status" == "failed" ]]; then
+    echo "Synthetic request failed permanently before retry state was observed: ${error_message:-<empty>}"
+    "$ROOT_DIR/bin/phase4-status"
+    exit 1
+  fi
+
+  available_epoch="$(/usr/bin/ruby -rtime -e 'value = ARGV[0]; abort if value.to_s.empty?; print Time.iso8601(value).to_i' "$available_at" 2>/dev/null || true)"
+  now_epoch="$(date +%s)"
+
+  if [[ "$status" == "queued" ]] && [[ "${attempts:-0}" -ge 1 ]] && [[ "$error_message" == *"$unsupported_message"* ]] && [[ -n "$available_epoch" ]] && (( available_epoch > now_epoch )); then
+    echo
+    echo "[request row]"
+    sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT
+  id,
+  shop_domain,
+  request_type,
+  queue_name,
+  status,
+  attempts,
+  available_at,
+  error_message,
+  created_at,
+  updated_at
+FROM async_job_requests
+WHERE id = '$(phase4_sql_escape "$REQUEST_ID")';
+SQL
+    echo
+    echo "[retry timing]"
+    sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT
+  available_at AS next_retry_at,
+  MAX(CAST(strftime('%s', available_at) - strftime('%s', 'now') AS INTEGER), 0) AS retry_in_seconds
+FROM async_job_requests
+WHERE id = '$(phase4_sql_escape "$REQUEST_ID")';
+SQL
+    echo
+    "$ROOT_DIR/bin/phase4-status"
+    REQUEST_DID_SUCCEED=1
+    exit 0
+  fi
+
+  sleep "$POLL_INTERVAL_SECONDS"
+done
+
+echo "Timed out waiting for retry/backoff state on synthetic request: $REQUEST_ID"
+if [[ "$FORCE_DRAIN_WITH_RAILS" != "1" ]]; then
+  echo "Tip: rerun with FORCE_DRAIN_WITH_RAILS=1 to force one drain cycle via Rails runner"
+fi
+"$ROOT_DIR/bin/phase4-status"
+exit 1

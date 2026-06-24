@@ -22,6 +22,37 @@
     return Math.floor(seconds / 86400) + "d ago";
   }
 
+  function apiPathWithShop(path, shopDomain) {
+    var url = new URL(path, window.location.origin);
+    if (shopDomain && !url.searchParams.get("shop")) {
+      url.searchParams.set("shop", shopDomain);
+    }
+    return url.pathname + url.search;
+  }
+
+  function formatRequestType(value) {
+    switch (value) {
+      case "sync.full":
+        return "Full sync";
+      case "sync.incremental":
+        return "Incremental sync";
+      case "sync.first_time":
+        return "First-time sync";
+      case "sync.bulk_finish":
+        return "Bulk finish import";
+      case "sync.bulk_start":
+        return "Bulk sync";
+      default:
+        return value || "Async request";
+    }
+  }
+
+  function truncateText(value, maxLength) {
+    if (!value) return "";
+    if (value.length <= maxLength) return value;
+    return value.slice(0, maxLength - 1) + "…";
+  }
+
   function updateSyncBanner(status) {
     var banner = $("#sync-banner");
     if (!banner || !status) return;
@@ -34,6 +65,7 @@
     banner.dataset.ordersSynced = String(synced);
     banner.dataset.totalEstimated = String(total);
     banner.dataset.lastSyncedAt = status.lastSyncedAt || "";
+    banner.dataset.queuedAt = status.queuedAt || "";
 
     if (status.status === "running") {
       banner.classList.remove("is-hidden");
@@ -42,6 +74,16 @@
       text('[data-role="progress-value"]', progress + "%", banner);
       var progressBar = $('[data-role="progress-bar"]', banner);
       if (progressBar) progressBar.style.width = progress + "%";
+      return;
+    }
+
+    if (status.status === "queued") {
+      banner.classList.remove("is-hidden");
+      text('[data-role="status-label"]', "Sync queued", banner);
+      text('[data-role="status-meta"]', "Waiting for the background worker to start this sync.", banner);
+      text('[data-role="progress-value"]', "0%", banner);
+      var queuedBar = $('[data-role="progress-bar"]', banner);
+      if (queuedBar) queuedBar.style.width = "0%";
       return;
     }
 
@@ -68,6 +110,85 @@
     banner.classList.add("is-hidden");
   }
 
+  function renderAsyncRequestPanel(banner, requests) {
+    var panel = $('[data-role="async-request-panel"]', banner);
+    var list = $('[data-role="async-request-list"]', banner);
+    var empty = $('[data-role="async-request-empty"]', banner);
+    var count = $('[data-role="async-request-count"]', banner);
+    var retryLatestButton = $('[data-action="retry-latest-failed"]', banner);
+    var retryAllButton = $('[data-action="retry-all-failed"]', banner);
+
+    if (!panel || !list || !empty || !count) return;
+
+    list.innerHTML = "";
+    count.textContent = requests.length + (requests.length === 1 ? " request" : " requests");
+    if (retryLatestButton) retryLatestButton.disabled = requests.length === 0;
+    if (retryAllButton) retryAllButton.disabled = requests.length === 0;
+
+    if (!requests.length) {
+      panel.classList.add("is-hidden");
+      empty.classList.add("is-hidden");
+      return;
+    }
+
+    panel.classList.remove("is-hidden");
+    empty.classList.add("is-hidden");
+
+    requests.forEach(function (request) {
+      var card = document.createElement("article");
+      card.className = "sync-request-card";
+
+      var row = document.createElement("div");
+      row.className = "sync-request-row";
+
+      var copy = document.createElement("div");
+
+      var title = document.createElement("div");
+      title.className = "sync-request-title";
+      title.textContent = formatRequestType(request.requestType);
+      copy.appendChild(title);
+
+      var meta = document.createElement("div");
+      meta.className = "sync-request-meta";
+      meta.textContent = "Attempts " + request.attempts + " • Failed " + timeAgo(request.updatedAt);
+      copy.appendChild(meta);
+      row.appendChild(copy);
+
+      var actions = document.createElement("div");
+      actions.className = "sync-request-actions";
+
+      if (request.canRetry) {
+        var retryButton = document.createElement("button");
+        retryButton.type = "button";
+        retryButton.className = "sync-request-button";
+        retryButton.dataset.action = "retry";
+        retryButton.dataset.requestId = request.id;
+        retryButton.textContent = "Retry";
+        actions.appendChild(retryButton);
+      }
+
+      if (request.canDelete) {
+        var deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "sync-request-button is-danger";
+        deleteButton.dataset.action = "delete";
+        deleteButton.dataset.requestId = request.id;
+        deleteButton.textContent = "Delete";
+        actions.appendChild(deleteButton);
+      }
+
+      row.appendChild(actions);
+      card.appendChild(row);
+
+      var error = document.createElement("div");
+      error.className = "sync-request-error";
+      error.textContent = truncateText(request.errorMessage || "No error message recorded.", 240);
+      card.appendChild(error);
+
+      list.appendChild(card);
+    });
+  }
+
   async function requestJson(url, options) {
     var response = await fetch(url, options || {});
     var payload = {};
@@ -85,21 +206,78 @@
   function bootSyncPolling() {
     var banner = $("#sync-banner");
     if (!banner || !banner.dataset.shopDomain) return;
+    var refreshingFailedRequests = false;
 
     updateSyncBanner({
       status: banner.dataset.status,
       ordersSynced: banner.dataset.ordersSynced,
       totalEstimated: banner.dataset.totalEstimated,
-      lastSyncedAt: banner.dataset.lastSyncedAt
+      lastSyncedAt: banner.dataset.lastSyncedAt,
+      queuedAt: banner.dataset.queuedAt
     });
 
-    window.setInterval(async function () {
+    async function refreshSyncBanner() {
       try {
-        var payload = await requestJson(banner.dataset.apiPath);
+        var payload = await requestJson(apiPathWithShop(banner.dataset.apiPath, banner.dataset.shopDomain));
         updateSyncBanner(payload);
       } catch (_error) {
         // Ignore polling failures.
       }
+    }
+
+    async function refreshFailedAsyncRequests() {
+      if (refreshingFailedRequests) return;
+      refreshingFailedRequests = true;
+      try {
+        var payload = await requestJson(apiPathWithShop(banner.dataset.asyncRequestsPath, banner.dataset.shopDomain));
+        renderAsyncRequestPanel(banner, payload.requests || []);
+      } catch (_error) {
+        renderAsyncRequestPanel(banner, []);
+      } finally {
+        refreshingFailedRequests = false;
+      }
+    }
+
+    banner.addEventListener("click", async function (event) {
+      var button = event.target.closest("[data-action]");
+      if (!button) return;
+
+      var requestId = button.dataset.requestId;
+      var action = button.dataset.action;
+      if (!action) return;
+      if ((action === "retry" || action === "delete") && !requestId) return;
+
+      button.disabled = true;
+      try {
+        if (action === "retry") {
+          await requestJson(apiPathWithShop("/api/async-requests/" + encodeURIComponent(requestId) + "/retry", banner.dataset.shopDomain), {
+            method: "POST"
+          });
+        } else if (action === "delete") {
+          await requestJson(apiPathWithShop("/api/async-requests/" + encodeURIComponent(requestId), banner.dataset.shopDomain), {
+            method: "DELETE"
+          });
+        } else if (action === "retry-latest-failed") {
+          await requestJson(apiPathWithShop(banner.dataset.asyncRetryLatestPath, banner.dataset.shopDomain), {
+            method: "POST"
+          });
+        } else if (action === "retry-all-failed") {
+          await requestJson(apiPathWithShop(banner.dataset.asyncRetryAllPath, banner.dataset.shopDomain), {
+            method: "POST"
+          });
+        }
+        await refreshSyncBanner();
+        await refreshFailedAsyncRequests();
+      } catch (_error) {
+        button.disabled = false;
+      }
+    });
+
+    refreshFailedAsyncRequests();
+
+    window.setInterval(async function () {
+      await refreshSyncBanner();
+      await refreshFailedAsyncRequests();
     }, 5000);
   }
 

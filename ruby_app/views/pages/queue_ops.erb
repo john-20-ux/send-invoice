@@ -1,0 +1,263 @@
+<%
+  status_links = [
+    { "label" => "All", "status" => "all" },
+    { "label" => "Failed", "status" => "failed" },
+    { "label" => "Active", "status" => "queued,claimed,dispatched,running" },
+    { "label" => "Completed", "status" => "completed" }
+  ]
+  current_status_filter = @async_request_result["statuses"].join(",")
+  total_requests = @async_request_counts.values.sum
+  active_requests = %w[queued claimed dispatched running].sum { |status| @async_request_counts[status].to_i }
+%>
+
+<section class="section-card">
+  <div class="toolbar">
+    <div>
+      <p class="eyebrow">Operator workspace</p>
+      <h2>Queue recovery and history</h2>
+      <p class="section-note"><%= @async_request_result["total"] %> requests match the current filter for this shop.</p>
+    </div>
+    <div class="button-inline">
+      <form method="post" action="/queue-ops/retry-latest-failed">
+        <button class="button-ghost" type="submit">Retry latest failed</button>
+      </form>
+      <form method="post" action="/queue-ops/retry-all-failed">
+        <button class="button" type="submit">Retry all failed</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="button-inline" style="margin-top:20px">
+    <% status_links.each do |item| %>
+      <% active = current_status_filter == item["status"] || (item["status"] == "all" && @async_request_result["statuses"] == SendInvoice::App::ASYNC_REQUEST_STATUSES) %>
+      <a class="<%= active ? "button-secondary" : "button-ghost" %>" href="<%= query_path("/queue-ops", { "shop" => @shop["shop_domain"], "status" => item["status"] }) %>"><%= h(item["label"]) %></a>
+    <% end %>
+  </div>
+</section>
+
+<section class="cards-grid">
+  <div class="section-card metric-card">
+    <div class="label">Total requests</div>
+    <div class="value"><%= total_requests %></div>
+  </div>
+  <div class="section-card metric-card">
+    <div class="label">Failed</div>
+    <div class="value"><%= @async_request_counts["failed"].to_i %></div>
+  </div>
+  <div class="section-card metric-card">
+    <div class="label">Active</div>
+    <div class="value"><%= active_requests %></div>
+  </div>
+  <div class="section-card metric-card">
+    <div class="label">Completed</div>
+    <div class="value"><%= @async_request_counts["completed"].to_i %></div>
+  </div>
+</section>
+
+<section class="grid-two">
+  <div class="section-card">
+    <p class="eyebrow">Sync diagnostics</p>
+    <div class="stack" style="margin-top:14px">
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Sync status</span>
+        <span class="<%= badge_class(@sync_status["status"]) %>"><%= h(@sync_status["status"] || "idle") %></span>
+      </div>
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Latest sync log</span>
+        <span><%= @latest_sync_log ? h(@latest_sync_log["status"]) : "No sync log yet" %></span>
+      </div>
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Last completed sync</span>
+        <span><%= @last_completed_sync ? format_datetime(@last_completed_sync["finished_at"] || @last_completed_sync["started_at"]) : "Never completed" %></span>
+      </div>
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Last order watermark</span>
+        <span><%= @sync_state ? format_datetime(@sync_state["last_order_updated_at"]) : "-" %></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <p class="eyebrow">Bulk diagnostics</p>
+    <div class="stack" style="margin-top:14px">
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Latest bulk job</span>
+        <span><%= @latest_bulk_job ? h(@latest_bulk_job["status"]) : "No bulk job yet" %></span>
+      </div>
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Import count</span>
+        <span><%= @latest_bulk_job ? @latest_bulk_job["imported_count"] : 0 %></span>
+      </div>
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Fallback used</span>
+        <span><%= @latest_bulk_job && @latest_bulk_job["fallback_used"] ? "Yes" : "No" %></span>
+      </div>
+      <div class="queue-ops-stat">
+        <span class="queue-ops-stat-label">Last bulk update</span>
+        <span><%= @latest_bulk_job ? format_datetime(@latest_bulk_job["updated_at"]) : "-" %></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section-card">
+  <div class="toolbar">
+    <div>
+      <p class="eyebrow">Batch operations</p>
+      <h2>First-time sync batch visibility</h2>
+      <p class="section-note">Track planning, completion, and failures for first-time sync batches beside async request recovery.</p>
+    </div>
+  </div>
+
+  <div class="cards-grid" style="margin-top:20px">
+    <div class="metric-card">
+      <div class="label">Batch plan status</div>
+      <div class="value"><%= h(@batch_summary["status"] || "not_planned") %></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Total batches</div>
+      <div class="value"><%= @batch_summary["totalBatches"] %></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Completed batches</div>
+      <div class="value"><%= @batch_summary["completedBatches"] %></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Failed batches</div>
+      <div class="value"><%= @batch_summary["failedBatches"] %></div>
+    </div>
+  </div>
+
+  <div class="grid-two" style="margin-top:20px">
+    <div class="queue-ops-stat">
+      <span class="queue-ops-stat-label">Initial sync completed</span>
+      <span><%= @batch_summary["initialSyncCompleted"] ? "Yes" : "No" %></span>
+    </div>
+    <div class="queue-ops-stat">
+      <span class="queue-ops-stat-label">Remaining sync completed</span>
+      <span><%= @batch_summary["remainingSyncCompleted"] ? "Yes" : "No" %></span>
+    </div>
+  </div>
+</section>
+
+<section class="table-shell">
+  <% if @recent_batch_logs.empty? %>
+    <div class="empty-state">No first-time sync batches have been planned for this shop yet.</div>
+  <% else %>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Batch</th>
+          <th>Range</th>
+          <th>Status</th>
+          <th>Priority</th>
+          <th class="align-right">Orders</th>
+          <th class="align-right">Retries</th>
+          <th>Updated</th>
+          <th>Error</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @recent_batch_logs.each do |batch| %>
+          <tr>
+            <td>
+              <strong><%= h(batch["batch_type"].to_s.gsub("_", " ")) %></strong>
+              <div class="table-subcopy">Sequence <%= batch["batch_sequence"] %> <% if batch["page_index"].to_i.positive? %>• Page <%= batch["page_index"] + 1 %><% end %></div>
+            </td>
+            <td><%= h("#{batch["start_date"]} to #{batch["end_date"]}") %></td>
+            <td><span class="<%= badge_class(batch["status"]) %>"><%= h(batch["status"]) %></span></td>
+            <td><%= h(batch["priority"]) %></td>
+            <td class="align-right"><%= batch["order_count"] %></td>
+            <td class="align-right"><%= batch["retry_count"] %></td>
+            <td>
+              <%= format_datetime(batch["updated_at"]) %>
+              <div class="table-subcopy"><%= time_ago(batch["updated_at"]) %></div>
+            </td>
+            <td><%= h(batch["error_message"] || "-") %></td>
+            <td>
+              <% if batch["status"] == "failed" %>
+                <form method="post" action="/queue-ops/batches/<%= h(batch["id"]) %>/retry">
+                  <button class="button-ghost" type="submit">Retry batch</button>
+                </form>
+              <% else %>
+                <span class="table-subcopy">-</span>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>
+
+<section class="table-shell">
+  <% if @async_request_result["requests"].empty? %>
+    <div class="empty-state">No background requests match this filter.</div>
+  <% else %>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Request</th>
+          <th>Queue</th>
+          <th>Status</th>
+          <th class="align-right">Attempts</th>
+          <th>Created</th>
+          <th>Updated</th>
+          <th>Error</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @async_request_result["requests"].each do |request| %>
+          <tr>
+            <td>
+              <strong><%= h(request["request_type"]) %></strong>
+              <div class="table-subcopy"><%= h(request["id"]) %></div>
+            </td>
+            <td><%= h(request["queue_name"]) %></td>
+            <td><span class="<%= badge_class(request["status"]) %>"><%= h(request["status"]) %></span></td>
+            <td class="align-right"><%= request["attempts"] %></td>
+            <td>
+              <%= format_datetime(request["created_at"]) %>
+              <div class="table-subcopy"><%= time_ago(request["created_at"]) %></div>
+            </td>
+            <td>
+              <%= format_datetime(request["updated_at"]) %>
+              <div class="table-subcopy"><%= time_ago(request["updated_at"]) %></div>
+            </td>
+            <td><%= h(request["error_message"] || "-") %></td>
+            <td>
+              <div class="button-inline">
+                <% if request["status"] == "failed" %>
+                  <form method="post" action="/queue-ops/requests/<%= h(request["id"]) %>/retry">
+                    <button class="button-ghost" type="submit">Retry</button>
+                  </form>
+                <% end %>
+                <% if %w[failed completed].include?(request["status"]) %>
+                  <form method="post" action="/queue-ops/requests/<%= h(request["id"]) %>/delete">
+                    <button class="button-danger" type="submit">Delete</button>
+                  </form>
+                <% end %>
+              </div>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>
+
+<% if @async_request_result["total_pages"] > 1 %>
+  <section class="section-card pagination">
+    <span>Page <%= @async_request_result["page"] %> of <%= @async_request_result["total_pages"] %></span>
+    <div class="pagination-links">
+      <% if @async_request_result["page"] > 1 %>
+        <a class="button-ghost" href="<%= query_path("/queue-ops", { "shop" => @shop["shop_domain"], "status" => current_status_filter, "page" => @async_request_result["page"] - 1, "limit" => @async_request_result["limit"] }) %>">Previous</a>
+      <% end %>
+      <% if @async_request_result["page"] < @async_request_result["total_pages"] %>
+        <a class="button-ghost" href="<%= query_path("/queue-ops", { "shop" => @shop["shop_domain"], "status" => current_status_filter, "page" => @async_request_result["page"] + 1, "limit" => @async_request_result["limit"] }) %>">Next</a>
+      <% end %>
+    </div>
+  </section>
+<% end %>

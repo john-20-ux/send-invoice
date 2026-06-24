@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bin/split-db-migrate [options]
+
+Modes:
+  Default mode backfills split databases from the current single app database.
+  Use --seed to create and seed fresh split databases with sample data instead.
+
+Options:
+  --source PATH       Source single-db SQLite file
+                      Default: ruby_app/db/send_invoice.sqlite3
+  --primary PATH      Target primary-server SQLite file
+                      Default: primary.sqlite
+  --storage PATH      Target data-storage SQLite file
+                      Default: data_storage.sqlite
+  --seed              Seed fresh split databases instead of backfilling
+  --overwrite         Remove existing target database files first
+  --help              Show this help text
+
+Examples:
+  bin/split-db-migrate
+  bin/split-db-migrate --source ruby_app/db/send_invoice.sqlite3 --primary primary.sqlite --storage data_storage.sqlite
+  bin/split-db-migrate --seed --primary /tmp/primary.sqlite --storage /tmp/storage.sqlite --overwrite
+EOF
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+assert_file_exists() {
+  if [ ! -f "$1" ]; then
+    echo "File not found: $1" >&2
+    exit 1
+  fi
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+SOURCE_DB="$REPO_ROOT/ruby_app/db/send_invoice.sqlite3"
+PRIMARY_DB="$REPO_ROOT/primary.sqlite"
+STORAGE_DB="$REPO_ROOT/data_storage.sqlite"
+MODE="migrate"
+OVERWRITE="false"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --source)
+      SOURCE_DB="$2"
+      shift 2
+      ;;
+    --primary)
+      PRIMARY_DB="$2"
+      shift 2
+      ;;
+    --storage)
+      STORAGE_DB="$2"
+      shift 2
+      ;;
+    --seed)
+      MODE="seed"
+      shift
+      ;;
+    --overwrite)
+      OVERWRITE="true"
+      shift
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+require_command sqlite3
+
+PRIMARY_SCHEMA="$REPO_ROOT/sql/primary_server.sql"
+STORAGE_SCHEMA="$REPO_ROOT/sql/data_storage.sql"
+PRIMARY_MIGRATION="$REPO_ROOT/sql/migrate_primary_from_single_db.sql"
+STORAGE_MIGRATION="$REPO_ROOT/sql/migrate_data_storage_from_single_db.sql"
+PRIMARY_SEED="$REPO_ROOT/sql/seed_primary_server.sql"
+STORAGE_SEED="$REPO_ROOT/sql/seed_data_storage.sql"
+
+assert_file_exists "$PRIMARY_SCHEMA"
+assert_file_exists "$STORAGE_SCHEMA"
+
+if [ "$MODE" = "migrate" ]; then
+  assert_file_exists "$PRIMARY_MIGRATION"
+  assert_file_exists "$STORAGE_MIGRATION"
+  assert_file_exists "$SOURCE_DB"
+else
+  assert_file_exists "$PRIMARY_SEED"
+  assert_file_exists "$STORAGE_SEED"
+fi
+
+mkdir -p "$(dirname "$PRIMARY_DB")"
+mkdir -p "$(dirname "$STORAGE_DB")"
+
+if [ "$OVERWRITE" = "true" ]; then
+  rm -f "$PRIMARY_DB" "$STORAGE_DB"
+else
+  if [ -e "$PRIMARY_DB" ] || [ -e "$STORAGE_DB" ]; then
+    echo "Target database already exists. Use --overwrite to replace it." >&2
+    exit 1
+  fi
+fi
+
+echo "Creating primary schema: $PRIMARY_DB"
+sqlite3 "$PRIMARY_DB" < "$PRIMARY_SCHEMA"
+
+echo "Creating storage schema: $STORAGE_DB"
+sqlite3 "$STORAGE_DB" < "$STORAGE_SCHEMA"
+
+if [ "$MODE" = "seed" ]; then
+  echo "Seeding primary database"
+  sqlite3 "$PRIMARY_DB" < "$PRIMARY_SEED"
+
+  echo "Seeding storage database"
+  sqlite3 "$STORAGE_DB" < "$STORAGE_SEED"
+else
+  echo "Backfilling primary database from source: $SOURCE_DB"
+  sqlite3 "$PRIMARY_DB" <<SQL
+ATTACH DATABASE '$SOURCE_DB' AS source_db;
+.read $PRIMARY_MIGRATION
+DETACH DATABASE source_db;
+SQL
+
+  echo "Backfilling storage database from source: $SOURCE_DB"
+  sqlite3 "$STORAGE_DB" <<SQL
+ATTACH DATABASE '$SOURCE_DB' AS source_db;
+.read $STORAGE_MIGRATION
+DETACH DATABASE source_db;
+SQL
+fi
+
+echo "Done."
+echo "Primary database: $PRIMARY_DB"
+echo "Storage database: $STORAGE_DB"

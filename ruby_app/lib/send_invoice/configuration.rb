@@ -6,6 +6,7 @@ module SendInvoice
                 :app_root,
                 :auto_sync_enabled,
                 :auto_sync_interval_seconds,
+                :background_backend,
                 :database_path,
                 :host,
                 :port,
@@ -16,6 +17,7 @@ module SendInvoice
                 :shopify_api_secret,
                 :shopify_scopes,
                 :sync_api_secret,
+                :uninstall_cleanup_interval_seconds,
                 :views_path
 
     def self.load(root:)
@@ -47,6 +49,7 @@ module SendInvoice
       @views_path = File.join(@app_root, "views")
       @public_path = File.join(@app_root, "public")
       @database_path = env["DATABASE_PATH"] || File.join(@app_root, "db", "send_invoice.sqlite3")
+      @background_backend = (env["BACKGROUND_BACKEND"] || "threads").to_s.strip
       @port = Integer(env["PORT"] || "3000", 10)
       @host = env["HOST"] || "http://localhost:3000"
       @shopify_api_key = env["SHOPIFY_API_KEY"].to_s
@@ -55,6 +58,7 @@ module SendInvoice
       @api_version = env["SHOPIFY_API_VERSION"] || "2026-04"
       @auto_sync_enabled = env["AUTO_SYNC_ENABLED"] == "true"
       @auto_sync_interval_seconds = [Integer(env["AUTO_SYNC_INTERVAL_SECONDS"] || "300", 10), 60].max
+      @uninstall_cleanup_interval_seconds = [Integer(env["UNINSTALL_CLEANUP_INTERVAL_SECONDS"] || "300", 10), 60].max
       @sync_api_secret = env["SYNC_API_SECRET"].to_s
       @session_cookie_name = env["SESSION_COOKIE_NAME"] || "send_invoice_session"
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
@@ -64,8 +68,24 @@ module SendInvoice
       @mock_mode
     end
 
+    def db_queue_backend?
+      @background_backend == "db_queue"
+    end
+
     def production?
       ENV["RACK_ENV"] == "production" || ENV["APP_ENV"] == "production"
+    end
+
+    def bulk_finish_webhook_uri
+      "#{@host.sub(%r{/\z}, '')}/webhooks/bulk-operations-finish"
+    end
+
+    def app_uninstalled_webhook_uri
+      "#{@host.sub(%r{/\z}, '')}/webhooks/app-uninstalled"
+    end
+
+    def orders_changed_webhook_uri
+      "#{@host.sub(%r{/\z}, '')}/webhooks/orders-changed"
     end
   end
 end

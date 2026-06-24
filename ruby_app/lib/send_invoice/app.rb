@@ -20,12 +20,15 @@ module SendInvoice
     NAV_ITEMS = [
       { "label" => "Home", "path" => "/dashboard" },
       { "label" => "Orders", "path" => "/orders" },
+      { "label" => "Queue Ops", "path" => "/queue-ops" },
       { "label" => "Vendors", "path" => "/vendors" },
       { "label" => "Invoice Templates", "path" => "/invoice-templates" },
       { "label" => "Notifications", "path" => "/notifications" },
       { "label" => "Settings", "path" => "/settings" },
       { "label" => "Support", "path" => "/support" }
     ].freeze
+
+    ASYNC_REQUEST_STATUSES = %w[queued claimed dispatched running completed failed].freeze
 
     class TemplateContext
       include ViewHelpers
@@ -54,12 +57,14 @@ module SendInvoice
     def handle(req, res)
       @request = req
       @response = res
+      @session_id = nil
+      @session = nil
       @response["Content-Type"] = "text/html; charset=utf-8"
-      load_session
+      load_session unless webhook_request?
 
       route!
     rescue UnauthorizedError => e
-      if api_request?
+      if api_request? || webhook_request?
         respond_json({ error: e.message }, status: 401)
       else
         flash!("error", e.message)
@@ -75,7 +80,7 @@ module SendInvoice
     rescue StandardError => e
       warn "[send-invoice] #{e.class}: #{e.message}"
       warn e.backtrace.first(10).join("\n")
-      if api_request?
+      if api_request? || webhook_request?
         respond_json({ error: "Internal server error" }, status: 500)
       else
         flash!("error", "Something went wrong while rendering this page.")
@@ -101,13 +106,19 @@ module SendInvoice
     def route!
       case [@request.request_method, @request.path]
       when ["GET", "/health"]
-        respond_json(status: "ok", timestamp: Time.now.utc.iso8601)
+        respond_json({ status: "ok", timestamp: Time.now.utc.iso8601 })
       when ["GET", "/"]
         handle_root
       when ["GET", "/auth"]
         handle_auth_start
       when ["GET", "/auth/callback"]
         handle_auth_callback
+      when ["POST", "/webhooks/bulk-operations-finish"]
+        handle_bulk_operations_finish_webhook
+      when ["POST", "/webhooks/app-uninstalled"]
+        handle_app_uninstalled_webhook
+      when ["POST", "/webhooks/orders-changed"]
+        handle_orders_changed_webhook
       when ["GET", "/onboarding"], ["GET", "/onboarding/step-1"]
         render_onboarding(1)
       when ["GET", "/onboarding/step-2"]
@@ -126,6 +137,12 @@ module SendInvoice
         render_orders
       when ["POST", "/orders/sync"]
         handle_manual_sync
+      when ["GET", "/queue-ops"]
+        render_queue_ops
+      when ["POST", "/queue-ops/retry-latest-failed"]
+        handle_queue_ops_retry_latest_failed
+      when ["POST", "/queue-ops/retry-all-failed"]
+        handle_queue_ops_retry_all_failed
       when ["GET", "/vendors"]
         render_vendors
       when ["POST", "/vendors"]
@@ -168,8 +185,19 @@ module SendInvoice
         api_sync_status
       when ["GET", "/api/sync/batches/status"]
         api_batch_sync_status
+      when ["GET", "/api/async-requests"]
+        api_async_requests
+      when ["POST", "/api/async-requests/retry-latest-failed"]
+        api_retry_latest_failed_async_request
+      when ["POST", "/api/async-requests/retry-all-failed"]
+        api_retry_all_failed_async_requests
       else
         return api_order_detail if @request.request_method == "GET" && @request.path.start_with?("/api/orders/")
+        return api_retry_async_request if @request.request_method == "POST" && @request.path.start_with?("/api/async-requests/") && @request.path.end_with?("/retry")
+        return api_delete_async_request if @request.request_method == "DELETE" && @request.path.start_with?("/api/async-requests/")
+        return handle_queue_ops_retry_async_request if @request.request_method == "POST" && @request.path.start_with?("/queue-ops/requests/") && @request.path.end_with?("/retry")
+        return handle_queue_ops_delete_async_request if @request.request_method == "POST" && @request.path.start_with?("/queue-ops/requests/") && @request.path.end_with?("/delete")
+        return handle_queue_ops_retry_batch_log if @request.request_method == "POST" && @request.path.start_with?("/queue-ops/batches/") && @request.path.end_with?("/retry")
         return render_vendor_invoice if @request.request_method == "GET" && @request.path.start_with?("/vendors/")
 
         raise NotFoundError
@@ -230,6 +258,7 @@ module SendInvoice
         "scopes" => token_data["scope"],
         "shop_name" => shop_info["name"] || shop.split(".").first
       })
+      register_shop_webhooks(shop, token_data.fetch("access_token"))
       @session["shop_domain"] = shop
       @session.delete("state")
       redirect_to("/onboarding?shop=#{URI.encode_www_form_component(shop)}")
@@ -349,6 +378,122 @@ module SendInvoice
         flash!("error", result["message"] || "Sync unavailable")
       end
       redirect_to(back_path("/orders"))
+    end
+
+    def render_queue_ops
+      shop = require_onboarded_shop
+      statuses = requested_async_request_statuses(default: ASYNC_REQUEST_STATUSES)
+      limit = requested_async_request_limit(default: 25)
+      page = requested_async_request_page
+      total = @store.async_job_request_count(shop_domain: shop["shop_domain"], statuses: statuses)
+      total_pages = [(total.to_f / limit).ceil, 1].max
+      page = [[page, 1].max, total_pages].min
+      requests = @store.async_job_requests(
+        shop_domain: shop["shop_domain"],
+        statuses: statuses,
+        limit: limit,
+        offset: (page - 1) * limit
+      )
+
+      render_page("pages/queue_ops", {
+        page_title: "Queue Ops",
+        current_path: @request.path,
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        async_request_result: {
+          "requests" => requests,
+          "statuses" => statuses,
+          "page" => page,
+          "limit" => limit,
+          "total" => total,
+          "total_pages" => total_pages
+        },
+        async_request_counts: @store.async_job_request_status_counts(shop_domain: shop["shop_domain"]),
+        batch_summary: @store.batch_summary(shop["shop_domain"]),
+        recent_batch_logs: @store.batch_logs(shop["shop_domain"]).last(12).reverse,
+        latest_sync_log: @store.latest_sync_log(shop["shop_domain"]),
+        last_completed_sync: @store.last_completed_sync(shop["shop_domain"]),
+        sync_state: @store.sync_state(shop["shop_domain"]),
+        latest_bulk_job: @store.latest_bulk_sync_job(shop["shop_domain"])
+      })
+    end
+
+    def handle_queue_ops_retry_latest_failed
+      shop = require_onboarded_shop
+      retried = @store.retry_latest_failed_async_job_request(shop_domain: shop["shop_domain"])
+
+      if retried
+        flash!("info", "Retried the latest failed background request.")
+      else
+        flash!("error", "No failed background requests found.")
+      end
+
+      redirect_to(back_path(queue_ops_path(shop["shop_domain"])))
+    end
+
+    def handle_queue_ops_retry_all_failed
+      shop = require_onboarded_shop
+      retried_count = @store.retry_all_failed_async_job_requests(shop_domain: shop["shop_domain"])
+
+      if retried_count.positive?
+        flash!("info", "Retried #{retried_count} failed background request#{retried_count == 1 ? '' : 's'}.")
+      else
+        flash!("error", "No failed background requests found.")
+      end
+
+      redirect_to(back_path(queue_ops_path(shop["shop_domain"])))
+    end
+
+    def handle_queue_ops_retry_async_request
+      shop = require_onboarded_shop
+      request = shop_async_job_request_from_path
+
+      if request && @store.retry_failed_async_job_request(request["id"])
+        flash!("info", "Retried background request #{request['id']}.")
+      elsif request
+        flash!("error", "Only failed background requests can be retried.")
+      else
+        flash!("error", "Background request not found.")
+      end
+
+      redirect_to(back_path(queue_ops_path(shop["shop_domain"])))
+    end
+
+    def handle_queue_ops_delete_async_request
+      shop = require_onboarded_shop
+      request = shop_async_job_request_from_path
+
+      if request && @store.delete_async_job_request(request["id"], allowed_statuses: %w[failed completed])
+        flash!("info", "Removed background request #{request['id']}.")
+      elsif request
+        flash!("error", "Only failed or completed background requests can be removed.")
+      else
+        flash!("error", "Background request not found.")
+      end
+
+      redirect_to(back_path(queue_ops_path(shop["shop_domain"])))
+    end
+
+    def handle_queue_ops_retry_batch_log
+      shop = require_onboarded_shop
+      batch = shop_batch_log_from_path
+
+      if batch.nil?
+        flash!("error", "Batch log not found.")
+      elsif batch["status"] != "failed"
+        flash!("error", "Only failed batch logs can be retried.")
+      else
+        @store.retry_failed_batch_log(batch["id"])
+        result = @sync_engine.trigger_first_time(shop: shop)
+
+        if result["started"]
+          flash!("info", "Retried batch #{batch['id']} and resumed first-time sync processing.")
+        else
+          flash!("info", "Batch #{batch['id']} is retryable. #{result['message'] || 'First-time sync is already queued or running.'}")
+        end
+      end
+
+      redirect_to(back_path(queue_ops_path(shop["shop_domain"])))
     end
 
     def render_vendors
@@ -554,13 +699,13 @@ module SendInvoice
     def api_shop
       shop = require_shop
       last_sync = @store.last_completed_sync(shop["shop_domain"])
-      respond_json(
+      respond_json({
         shopDomain: shop["shop_domain"],
         shopName: shop["shop_name"],
         ownerEmail: shop["owner_email"],
         installedAt: shop["installed_at"],
         hasCompletedInitialSync: !last_sync.nil?
-      )
+      })
     end
 
     def api_update_shop_email
@@ -574,7 +719,7 @@ module SendInvoice
       end
 
       @store.update_shop(shop["shop_domain"], "owner_email" => (email.empty? ? nil : email))
-      respond_json(success: true)
+      respond_json({ success: true })
     end
 
     def api_orders
@@ -586,13 +731,13 @@ module SendInvoice
         limit: single_value(params["limit"]) || 25,
         search: single_value(params["search"])
       })
-      respond_json(
+      respond_json({
         orders: result["orders"],
         total: result["total"],
         page: result["page"],
         limit: result["limit"],
         totalPages: result["total_pages"]
-      )
+      })
     end
 
     def api_order_detail
@@ -633,11 +778,11 @@ module SendInvoice
       authorize_sync_secret!
       payload = request_payload
       type = payload["type"].to_s == "full" ? "full" : "incremental"
-      respond_json(
+      respond_json({
         startedAt: Time.now.utc.iso8601,
         type: type,
         shops: @sync_engine.trigger_all(type: type, skip_rate_limit: true)
-      )
+      })
     end
 
     def api_sync_status
@@ -648,6 +793,177 @@ module SendInvoice
     def api_batch_sync_status
       shop = require_shop
       respond_json(@sync_engine.batch_status(shop["shop_domain"]))
+    end
+
+    def api_async_requests
+      shop = require_shop
+      statuses = requested_async_request_statuses
+      requests = @store.async_job_requests(
+        shop_domain: shop["shop_domain"],
+        statuses: statuses,
+        limit: requested_async_request_limit
+      )
+
+      respond_json({
+        requests: requests.map { |request| serialize_async_job_request(request) },
+        statuses: statuses
+      })
+    end
+
+    def api_retry_async_request
+      require_shop
+      request = shop_async_job_request_from_path
+      return respond_json({ error: "Async job request not found" }, status: 404) unless request
+
+      retried = @store.retry_failed_async_job_request(request["id"])
+      unless retried
+        respond_json({ error: "Only failed async job requests can be retried" }, status: 409)
+        return
+      end
+
+      respond_json({
+        retried: true,
+        request: serialize_async_job_request(retried)
+      })
+    end
+
+    def api_retry_latest_failed_async_request
+      shop = require_shop
+      retried = @store.retry_latest_failed_async_job_request(shop_domain: shop["shop_domain"])
+      return respond_json({ error: "No failed async job requests found" }, status: 404) unless retried
+
+      respond_json({
+        retried: true,
+        request: serialize_async_job_request(retried)
+      })
+    end
+
+    def api_retry_all_failed_async_requests
+      shop = require_shop
+      retried_count = @store.retry_all_failed_async_job_requests(shop_domain: shop["shop_domain"])
+      return respond_json({ error: "No failed async job requests found" }, status: 404) if retried_count.zero?
+
+      respond_json({
+        retried: true,
+        retriedCount: retried_count
+      })
+    end
+
+    def api_delete_async_request
+      require_shop
+      request = shop_async_job_request_from_path
+      return respond_json({ error: "Async job request not found" }, status: 404) unless request
+
+      deleted = @store.delete_async_job_request(request["id"], allowed_statuses: %w[failed completed])
+      unless deleted
+        respond_json({ error: "Only failed or completed async job requests can be deleted" }, status: 409)
+        return
+      end
+
+      respond_json({
+        deleted: true,
+        requestId: request["id"]
+      })
+    end
+
+    def handle_bulk_operations_finish_webhook
+      raw_body = @request.body.to_s
+      hmac = header_value("x-shopify-hmac-sha256")
+      raise UnauthorizedError, "Invalid webhook signature" unless @shopify_client.verify_webhook_hmac(raw_body, hmac)
+
+      topic = header_value("x-shopify-topic").to_s
+      raise UnauthorizedError, "Unexpected webhook topic" unless topic == "bulk_operations/finish"
+
+      shop_domain = header_value("x-shopify-shop-domain").to_s
+      raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+
+      shop = @store.shop(shop_domain)
+      raise UnauthorizedError, "Unknown webhook shop" unless shop
+
+      payload = JSON.parse(raw_body)
+      operation_id = payload["admin_graphql_api_id"].to_s
+      raise UnauthorizedError, "Missing bulk operation ID" if operation_id.empty?
+
+      accepted = @sync_engine.handle_bulk_finish(shop: shop, operation_id: operation_id)
+      respond_json({ received: true, accepted: accepted })
+    rescue JSON::ParserError
+      respond_json({ error: "Invalid webhook payload" }, status: 400)
+    end
+
+    def handle_app_uninstalled_webhook
+      raw_body = @request.body.to_s
+      hmac = header_value("x-shopify-hmac-sha256")
+      raise UnauthorizedError, "Invalid webhook signature" unless @shopify_client.verify_webhook_hmac(raw_body, hmac)
+
+      topic = header_value("x-shopify-topic").to_s
+      raise UnauthorizedError, "Unexpected webhook topic" unless topic == "app/uninstalled"
+
+      shop_domain = header_value("x-shopify-shop-domain").to_s
+      raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+
+      shop = @sync_engine.mark_shop_uninstalled(shop_domain)
+      respond_json({
+        received: true,
+        scheduledForDeletionAt: shop && shop["scheduled_for_deletion_at"]
+      })
+    end
+
+    def handle_orders_changed_webhook
+      raw_body = @request.body.to_s
+      hmac = header_value("x-shopify-hmac-sha256")
+      raise UnauthorizedError, "Invalid webhook signature" unless @shopify_client.verify_webhook_hmac(raw_body, hmac)
+
+      topic = header_value("x-shopify-topic").to_s
+      allowed_topics = ["orders/create", "orders/updated", "orders/edited"]
+      raise UnauthorizedError, "Unexpected webhook topic" unless allowed_topics.include?(topic)
+
+      shop_domain = header_value("x-shopify-shop-domain").to_s
+      raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+
+      shop = @store.shop(shop_domain)
+      raise UnauthorizedError, "Unknown webhook shop" unless shop
+
+      result = @sync_engine.trigger(shop: shop, type: "incremental", skip_rate_limit: true)
+      respond_json({
+        received: true,
+        accepted: result["started"],
+        topic: topic
+      })
+    end
+
+    def register_shop_webhooks(shop_domain, access_token)
+      @shopify_client.ensure_webhook_subscription(
+        shop_domain,
+        access_token,
+        topic: "BULK_OPERATIONS_FINISH",
+        uri: @config.bulk_finish_webhook_uri
+      )
+      @shopify_client.ensure_webhook_subscription(
+        shop_domain,
+        access_token,
+        topic: "APP_UNINSTALLED",
+        uri: @config.app_uninstalled_webhook_uri
+      )
+      @shopify_client.ensure_webhook_subscription(
+        shop_domain,
+        access_token,
+        topic: "ORDERS_CREATE",
+        uri: @config.orders_changed_webhook_uri
+      )
+      @shopify_client.ensure_webhook_subscription(
+        shop_domain,
+        access_token,
+        topic: "ORDERS_UPDATED",
+        uri: @config.orders_changed_webhook_uri
+      )
+      @shopify_client.ensure_webhook_subscription(
+        shop_domain,
+        access_token,
+        topic: "ORDERS_EDITED",
+        uri: @config.orders_changed_webhook_uri
+      )
+    rescue StandardError => e
+      warn "[send-invoice] webhook registration failed for #{shop_domain}: #{e.class}: #{e.message}"
     end
 
     def render_page(page, locals, status: 200, layout: "application")
@@ -685,6 +1001,11 @@ module SendInvoice
       raise UnauthorizedError, "Unauthorized: missing or invalid shop domain" unless @shopify_client.valid_shop_domain?(requested_shop.to_s)
 
       shop = @store.shop(requested_shop)
+      if shop && shop["uninstalled_at"]
+        return nil if optional
+
+        raise UnauthorizedError, "Unauthorized: shop uninstalled. Please reinstall the app."
+      end
       return shop if shop
       return nil if optional
 
@@ -906,12 +1227,105 @@ module SendInvoice
       value.is_a?(Array) ? value.first : value
     end
 
+    def requested_async_request_statuses(default: ["failed"])
+      raw_statuses = single_value(params["status"]).to_s.strip
+      return Array(default) if raw_statuses.empty?
+      return ASYNC_REQUEST_STATUSES if raw_statuses == "all"
+
+      statuses = raw_statuses.split(",").map(&:strip).reject(&:empty?).uniq
+      invalid = statuses - ASYNC_REQUEST_STATUSES
+      raise UnauthorizedError, "Invalid async request status filter" unless invalid.empty?
+
+      statuses
+    end
+
+    def requested_async_request_limit(default: 20)
+      limit = single_value(params["limit"]).to_i
+      limit = default if limit <= 0
+      [limit, 100].min
+    end
+
+    def requested_async_request_page
+      page = single_value(params["page"]).to_i
+      page <= 0 ? 1 : page
+    end
+
+    def shop_async_job_request_from_path
+      request_id = async_job_request_id_from_path
+      request = @store.async_job_request(request_id)
+      return nil unless request
+      return request if request["shop_domain"] == require_shop["shop_domain"]
+
+      nil
+    end
+
+    def shop_batch_log_from_path
+      batch_id = batch_log_id_from_path
+      batch = @store.batch_log(batch_id)
+      return nil unless batch
+      return batch if batch["shop_domain"] == require_shop["shop_domain"]
+
+      nil
+    end
+
+    def async_job_request_id_from_path
+      path = @request.path.to_s
+      if path.end_with?("/retry") || path.end_with?("/delete")
+        File.basename(File.dirname(path))
+      else
+        File.basename(path)
+      end
+    end
+
+    def batch_log_id_from_path
+      File.basename(File.dirname(@request.path.to_s))
+    end
+
+    def serialize_async_job_request(request)
+      retry_in_seconds = nil
+      if request["status"] == "queued" && request["error_message"] && request["available_at"]
+        begin
+          retry_in_seconds = [Time.iso8601(request["available_at"]).to_i - Time.now.utc.to_i, 0].max
+        rescue ArgumentError
+          retry_in_seconds = nil
+        end
+      end
+
+      {
+        id: request["id"],
+        shopDomain: request["shop_domain"],
+        requestType: request["request_type"],
+        queueName: request["queue_name"],
+        status: request["status"],
+        attempts: request["attempts"],
+        claimedBy: request["claimed_by"],
+        claimedAt: request["claimed_at"],
+        availableAt: request["available_at"],
+        dispatchedAt: request["dispatched_at"],
+        errorMessage: request["error_message"],
+        createdAt: request["created_at"],
+        updatedAt: request["updated_at"],
+        payload: request["payload"],
+        retryInSeconds: retry_in_seconds,
+        canRetry: request["status"] == "failed",
+        canDelete: %w[failed completed].include?(request["status"])
+      }
+    end
+
     def header_value(name)
       Array(@request.header[name.to_s.downcase]).first
     end
 
     def api_request?
       @request.path.start_with?("/api/")
+    end
+
+    def webhook_request?
+      @request&.path.to_s.start_with?("/webhooks/")
+    end
+
+    def queue_ops_path(shop_domain)
+      query_path("/queue-ops", { "shop" => shop_domain })
     end
   end
 end

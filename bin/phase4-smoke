@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/bin/phase4-common.sh"
+
+DATABASE_PATH="${DATABASE_PATH:-$(phase4_app_database_path)}"
+APP_URL="${APP_URL:-$(phase4_app_url)}"
+SHOP_DOMAIN="${SHOP_DOMAIN:-demo-store.myshopify.com}"
+SYNC_TYPE="${SYNC_TYPE:-full}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-1}"
+
+phase4_require_commands curl sqlite3 /usr/bin/ruby
+phase4_assert_app_database_exists
+phase4_assert_queue_db_available
+if ! phase4_health_gate; then
+  echo "Phase 4 health gate failed: ${PHASE4_HEALTH_ERROR:-unknown error}"
+  exit 1
+fi
+if ! phase4_abort_on_duplicate_sidecars "Phase 4 smoke"; then
+  exit 1
+fi
+
+echo "Starting Phase 4 smoke test"
+echo "APP_URL=$APP_URL"
+echo "SHOP_DOMAIN=$SHOP_DOMAIN"
+echo "SYNC_TYPE=$SYNC_TYPE"
+echo "DATABASE_PATH=$DATABASE_PATH"
+echo "QUEUE_ADAPTER=$(phase4_queue_db_adapter)"
+echo "$PHASE4_SIDECAR_HEALTH_SUMMARY"
+if [[ -n "${PHASE4_HEALTH_WARNING:-}" ]]; then
+  echo "Warning: $PHASE4_HEALTH_WARNING"
+fi
+
+response_file="$(mktemp)"
+trap 'rm -f "$response_file"' EXIT
+
+curl -sS -o "$response_file" -X POST "$APP_URL/api/sync?shop=$SHOP_DOMAIN" \
+  -H "Content-Type: application/json" \
+  -d "{\"type\":\"$SYNC_TYPE\"}"
+
+request_info="$(
+  /usr/bin/ruby -rjson -e '
+    data = JSON.parse(File.read(ARGV[0]))
+    abort("Response did not start a queued sync: #{data}") unless data["started"] == true
+    abort("Response missing requestId: #{data}") if data["requestId"].to_s.empty?
+    puts [data["requestId"], data["mode"]].join("|")
+  ' "$response_file"
+)"
+
+request_id="${request_info%%|*}"
+mode="${request_info##*|}"
+
+echo "Queued request_id=$request_id mode=$mode"
+
+deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+last_status=""
+
+while (( $(date +%s) <= deadline )); do
+  row="$(
+    sqlite3 -separator '|' "$DATABASE_PATH" \
+      "SELECT COALESCE(status, ''), COALESCE(error_message, ''), COALESCE(dispatched_at, ''), COALESCE(attempts, 0) FROM async_job_requests WHERE id = '$(phase4_sql_escape "$request_id")' LIMIT 1;"
+  )"
+
+  if [[ -n "$row" ]]; then
+    status="${row%%|*}"
+    remainder="${row#*|}"
+    error_message="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    dispatched_at="${remainder%%|*}"
+    attempts="${remainder##*|}"
+
+    if [[ "$status" != "$last_status" ]]; then
+      echo "request status=$status attempts=$attempts dispatched_at=${dispatched_at:-n/a}"
+      last_status="$status"
+    fi
+
+    case "$status" in
+      completed)
+        echo
+        echo "[request row]"
+        sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT id, shop_domain, request_type, status, attempts, created_at, dispatched_at, updated_at
+FROM async_job_requests
+WHERE id = '$(phase4_sql_escape "$request_id")';
+SQL
+        echo
+        echo "[latest sync log]"
+        sqlite3 "$DATABASE_PATH" <<SQL
+.headers on
+.mode column
+SELECT id, shop_domain, status, orders_synced, total_estimated, started_at, finished_at
+FROM sync_logs
+WHERE shop_domain = '$(phase4_sql_escape "$SHOP_DOMAIN")'
+ORDER BY started_at DESC
+LIMIT 1;
+SQL
+        echo
+        "$ROOT_DIR/bin/phase4-status"
+        exit 0
+        ;;
+      failed)
+        echo "request failed: $error_message"
+        "$ROOT_DIR/bin/phase4-status"
+        exit 1
+        ;;
+    esac
+  fi
+
+  sleep "$POLL_INTERVAL_SECONDS"
+done
+
+echo "Timed out waiting for async request completion: $request_id"
+"$ROOT_DIR/bin/phase4-status"
+exit 1

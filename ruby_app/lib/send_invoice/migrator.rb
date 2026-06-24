@@ -17,6 +17,9 @@ module SendInvoice
             scopes TEXT,
             owner_email TEXT,
             installed_at TEXT NOT NULL,
+            uninstalled_at TEXT,
+            scheduled_for_deletion_at TEXT,
+            data_deletion_started_at TEXT,
             updated_at TEXT NOT NULL,
             onboarded INTEGER NOT NULL DEFAULT 0,
             current_plan TEXT NOT NULL DEFAULT 'trial',
@@ -60,7 +63,6 @@ module SendInvoice
           );
 
           CREATE INDEX IF NOT EXISTS idx_orders_shop_created ON orders(shop_domain, created_at DESC);
-          CREATE INDEX IF NOT EXISTS idx_orders_shop_updated ON orders(shop_domain, updated_at DESC);
 
           CREATE TABLE IF NOT EXISTS sync_logs (
             id TEXT PRIMARY KEY,
@@ -148,13 +150,64 @@ module SendInvoice
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
           );
+
+          CREATE TABLE IF NOT EXISTS sync_command_locks (
+            shop_domain TEXT NOT NULL,
+            command_key TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            locked_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (shop_domain, command_key),
+            FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_sync_command_locks_owner ON sync_command_locks(owner_id);
+
+          CREATE TABLE IF NOT EXISTS async_job_requests (
+            id TEXT PRIMARY KEY,
+            shop_domain TEXT,
+            request_type TEXT NOT NULL,
+            queue_name TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            claimed_by TEXT,
+            claimed_at TEXT,
+            available_at TEXT NOT NULL,
+            dispatched_at TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_async_job_requests_status_available
+            ON async_job_requests(status, available_at, created_at);
+          CREATE INDEX IF NOT EXISTS idx_async_job_requests_shop_created
+            ON async_job_requests(shop_domain, created_at DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_async_job_requests_active_dedupe
+            ON async_job_requests(dedupe_key)
+            WHERE status IN ('queued', 'claimed', 'dispatched', 'running');
         SQL
 
         ensure_column(db, "orders", "updated_at", "TEXT")
+        ensure_column(db, "shops", "uninstalled_at", "TEXT")
+        ensure_column(db, "shops", "scheduled_for_deletion_at", "TEXT")
+        ensure_column(db, "shops", "data_deletion_started_at", "TEXT")
         ensure_column(db, "bulk_sync_jobs", "fallback_sync_log_id", "TEXT")
         db.execute("CREATE INDEX IF NOT EXISTS idx_orders_shop_updated ON orders(shop_domain, updated_at DESC)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_shop_started ON bulk_sync_jobs(shop_domain, started_at DESC)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_bulk_sync_jobs_operation ON bulk_sync_jobs(shopify_bulk_operation_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_shops_scheduled_deletion ON shops(scheduled_for_deletion_at, data_deletion_started_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_sync_command_locks_owner ON sync_command_locks(owner_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_async_job_requests_status_available ON async_job_requests(status, available_at, created_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_async_job_requests_shop_created ON async_job_requests(shop_domain, created_at DESC)")
+        db.execute(<<~SQL)
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_async_job_requests_active_dedupe
+          ON async_job_requests(dedupe_key)
+          WHERE status IN ('queued', 'claimed', 'dispatched', 'running')
+        SQL
       end
     end
 

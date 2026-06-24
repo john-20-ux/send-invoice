@@ -26,8 +26,10 @@ module SendInvoice
       end
 
       shopify_client = ShopifyClient.new(config)
+      Thread.new { register_webhooks(config, store, shopify_client) } unless config.mock_mode?
       sync_engine = SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
       sync_engine.start_scheduler
+      sync_engine.start_uninstall_cleanup_worker
       application = App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
 
       server = WEBrick::HTTPServer.new(
@@ -47,6 +49,43 @@ module SendInvoice
       puts "Ruby app listening on http://localhost:#{config.port}"
       puts "Mode: #{config.mock_mode? ? 'mock' : 'shopify'}"
       server.start
+    end
+
+    def register_webhooks(config, store, shopify_client)
+      store.syncable_shops.each do |shop|
+        shopify_client.ensure_webhook_subscription(
+          shop.fetch("shop_domain"),
+          shop.fetch("access_token"),
+          topic: "BULK_OPERATIONS_FINISH",
+          uri: config.bulk_finish_webhook_uri
+        )
+        shopify_client.ensure_webhook_subscription(
+          shop.fetch("shop_domain"),
+          shop.fetch("access_token"),
+          topic: "APP_UNINSTALLED",
+          uri: config.app_uninstalled_webhook_uri
+        )
+        shopify_client.ensure_webhook_subscription(
+          shop.fetch("shop_domain"),
+          shop.fetch("access_token"),
+          topic: "ORDERS_CREATE",
+          uri: config.orders_changed_webhook_uri
+        )
+        shopify_client.ensure_webhook_subscription(
+          shop.fetch("shop_domain"),
+          shop.fetch("access_token"),
+          topic: "ORDERS_UPDATED",
+          uri: config.orders_changed_webhook_uri
+        )
+        shopify_client.ensure_webhook_subscription(
+          shop.fetch("shop_domain"),
+          shop.fetch("access_token"),
+          topic: "ORDERS_EDITED",
+          uri: config.orders_changed_webhook_uri
+        )
+      rescue StandardError => e
+        warn "[send-invoice] webhook reconciliation failed for #{shop['shop_domain']}: #{e.class}: #{e.message}"
+      end
     end
   end
 end

@@ -1,0 +1,107 @@
+<%
+queue_adapter = ENV.fetch("SEND_INVOICE_QUEUE_DB_ADAPTER", "sqlite3")
+queue_adapter = case queue_adapter
+                when "postgres", "postgresql", "pg"
+                  "postgresql"
+                else
+                  "sqlite3"
+                end
+
+queue_database_url = ENV["SEND_INVOICE_QUEUE_DATABASE_URL"]
+queue_db_host = ENV["SEND_INVOICE_QUEUE_DB_HOST"] || "127.0.0.1"
+queue_db_port = Integer(ENV.fetch("SEND_INVOICE_QUEUE_DB_PORT", "5432"), 10)
+queue_db_name = ENV["SEND_INVOICE_QUEUE_DB_NAME"]
+queue_db_user = ENV["SEND_INVOICE_QUEUE_DB_USER"]
+queue_db_password = ENV["SEND_INVOICE_QUEUE_DB_PASSWORD"]
+queue_db_sslmode = ENV["SEND_INVOICE_QUEUE_DB_SSLMODE"]
+sqlite_timeout = Integer(ENV.fetch("SEND_INVOICE_SQLITE_TIMEOUT", "30000"), 10)
+primary_database_path = ENV["SEND_INVOICE_DATABASE_PATH"] || File.expand_path("../../ruby_app/db/send_invoice.sqlite3", __dir__)
+development_queue_database_path = ENV["SEND_INVOICE_QUEUE_DATABASE_PATH"] || File.expand_path("../storage/development_queue.sqlite3", __dir__)
+test_primary_database_path = ENV["SEND_INVOICE_TEST_DATABASE_PATH"] || File.expand_path("../tmp/test_primary.sqlite3", __dir__)
+test_queue_database_path = ENV["SEND_INVOICE_TEST_QUEUE_DATABASE_PATH"] || File.expand_path("../tmp/test_queue.sqlite3", __dir__)
+%>
+
+default: &default
+  pool: <%= Integer(ENV.fetch("RAILS_MAX_THREADS", 10)) %>
+
+sqlite_defaults: &sqlite_defaults
+  adapter: sqlite3
+  timeout: <%= sqlite_timeout %>
+
+development:
+  primary:
+    <<: *default
+    <<: *sqlite_defaults
+    pool: <%= Integer(ENV.fetch("RAILS_MAX_THREADS", 4)) %>
+    database: <%= primary_database_path %>
+  queue:
+    <<: *default
+    pool: <%= Integer(ENV.fetch("RAILS_MAX_THREADS", 4)) %>
+<% if queue_adapter == "postgresql" %>
+    adapter: postgresql
+<% if queue_database_url %>
+    url: <%= queue_database_url %>
+<% else %>
+    host: <%= queue_db_host %>
+    port: <%= queue_db_port %>
+    database: <%= queue_db_name %>
+<% if queue_db_user %>
+    username: <%= queue_db_user %>
+<% end %>
+<% if queue_db_password %>
+    password: <%= queue_db_password %>
+<% end %>
+<% if queue_db_sslmode %>
+    sslmode: <%= queue_db_sslmode %>
+<% end %>
+<% end %>
+<% else %>
+    <<: *sqlite_defaults
+    database: <%= development_queue_database_path %>
+<% end %>
+    migrations_paths: db/queue_migrate
+    schema_dump: db/queue_schema.rb
+
+test:
+  primary:
+    <<: *default
+    <<: *sqlite_defaults
+    database: <%= test_primary_database_path %>
+  queue:
+    <<: *default
+    <<: *sqlite_defaults
+    database: <%= test_queue_database_path %>
+    migrations_paths: db/queue_migrate
+    schema_dump: db/queue_schema.rb
+
+production:
+  primary:
+    <<: *default
+    <<: *sqlite_defaults
+    database: <%= ENV.fetch("SEND_INVOICE_DATABASE_PATH") %>
+  queue:
+    <<: *default
+<% if queue_adapter == "postgresql" %>
+    adapter: postgresql
+<% if queue_database_url %>
+    url: <%= queue_database_url %>
+<% else %>
+    host: <%= queue_db_host %>
+    port: <%= queue_db_port %>
+    database: <%= queue_db_name %>
+<% if queue_db_user %>
+    username: <%= queue_db_user %>
+<% end %>
+<% if queue_db_password %>
+    password: <%= queue_db_password %>
+<% end %>
+<% if queue_db_sslmode %>
+    sslmode: <%= queue_db_sslmode %>
+<% end %>
+<% end %>
+<% else %>
+    <<: *sqlite_defaults
+    database: <%= ENV.fetch("SEND_INVOICE_QUEUE_DATABASE_PATH") %>
+<% end %>
+    migrations_paths: db/queue_migrate
+    schema_dump: db/queue_schema.rb

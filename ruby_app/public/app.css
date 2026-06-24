@@ -305,6 +305,7 @@ textarea {
 }
 
 .sync-banner {
+  flex-wrap: wrap;
   background: var(--panel);
 }
 
@@ -348,6 +349,116 @@ textarea {
   font-size: 12px;
   font-weight: 720;
   text-align: right;
+}
+
+.sync-recovery-panel {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.sync-recovery-panel.is-hidden,
+.sync-recovery-empty.is-hidden {
+  display: none;
+}
+
+.sync-recovery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sync-recovery-summary {
+  display: grid;
+  gap: 2px;
+}
+
+.sync-recovery-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sync-recovery-count,
+.sync-recovery-empty,
+.sync-request-meta,
+.sync-request-error {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sync-recovery-list {
+  display: grid;
+  gap: 8px;
+}
+
+.sync-request-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-subtle);
+}
+
+.sync-request-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sync-request-title {
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.sync-request-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sync-request-error {
+  line-height: 1.4;
+}
+
+.sync-request-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-request-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.sync-request-button:hover {
+  background: var(--line-soft);
+}
+
+.sync-request-button.is-danger {
+  color: var(--red);
+  border-color: #f1c3bc;
+  background: var(--red-weak);
+}
+
+.sync-request-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 .flash {
@@ -476,6 +587,19 @@ textarea {
   font-size: 28px;
   font-weight: 780;
   line-height: 1.05;
+}
+
+.queue-ops-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.queue-ops-stat-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
 }
 
 .chart-bars {
@@ -684,6 +808,12 @@ textarea {
 
 .data-table td {
   font-size: 13px;
+}
+
+.table-subcopy {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .data-table input {
@@ -914,6 +1044,25 @@ textarea {
 
   .sync-progress {
     width: 100%;
+  }
+
+  .sync-request-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sync-recovery-header,
+  .sync-request-actions {
+    width: 100%;
+  }
+
+  .sync-recovery-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sync-recovery-tools {
+    justify-content: flex-start;
   }
 
   .metric-card .value,

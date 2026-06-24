@@ -18,6 +18,8 @@ module SendInvoice
       end
 
       now = Time.now.utc.iso8601
+      normalized_attributes = normalize_keys(attributes)
+      reinstalling = present?(normalized_attributes["access_token"])
       payload = {
         "id" => SecureRandom.uuid,
         "shop_domain" => shop_domain,
@@ -26,6 +28,9 @@ module SendInvoice
         "scopes" => attributes["scopes"] || attributes[:scopes],
         "owner_email" => attributes["owner_email"] || attributes[:owner_email],
         "installed_at" => now,
+        "uninstalled_at" => reinstalling ? nil : normalized_attributes["uninstalled_at"],
+        "scheduled_for_deletion_at" => reinstalling ? nil : normalized_attributes["scheduled_for_deletion_at"],
+        "data_deletion_started_at" => reinstalling ? nil : normalized_attributes["data_deletion_started_at"],
         "updated_at" => now,
         "onboarded" => truthy_db(attributes["onboarded"] || attributes[:onboarded] || false),
         "current_plan" => attributes["current_plan"] || attributes[:current_plan] || "trial",
@@ -39,12 +44,12 @@ module SendInvoice
       }
 
       @database.with_connection do |db|
-        db.execute(<<~SQL, payload.values_at("id", "shop_domain", "shop_name", "access_token", "scopes", "owner_email", "installed_at", "updated_at", "onboarded", "current_plan", "trial_started_at", "tax_rate", "currency", "font_name", "notification_config", "invoice_template_config", "vendor_edits"))
+        db.execute(<<~SQL, payload.values_at("id", "shop_domain", "shop_name", "access_token", "scopes", "owner_email", "installed_at", "uninstalled_at", "scheduled_for_deletion_at", "data_deletion_started_at", "updated_at", "onboarded", "current_plan", "trial_started_at", "tax_rate", "currency", "font_name", "notification_config", "invoice_template_config", "vendor_edits"))
           INSERT INTO shops (
             id, shop_domain, shop_name, access_token, scopes, owner_email, installed_at,
-            updated_at, onboarded, current_plan, trial_started_at, tax_rate, currency,
+            uninstalled_at, scheduled_for_deletion_at, data_deletion_started_at, updated_at, onboarded, current_plan, trial_started_at, tax_rate, currency,
             font_name, notification_config, invoice_template_config, vendor_edits
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL
       end
 
@@ -60,10 +65,389 @@ module SendInvoice
 
     def syncable_shops
       @database.with_connection do |db|
-        db.execute("SELECT * FROM shops WHERE access_token IS NOT NULL AND access_token != '' ORDER BY installed_at ASC").map do |row|
+        db.execute("SELECT * FROM shops WHERE access_token IS NOT NULL AND access_token != '' AND uninstalled_at IS NULL ORDER BY installed_at ASC").map do |row|
           hydrate_shop(row)
         end
       end
+    end
+
+    def mark_shop_uninstalled(shop_domain, uninstalled_at:, scheduled_for_deletion_at:)
+      now = Time.now.utc.iso8601
+
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [nil, uninstalled_at, scheduled_for_deletion_at, nil, now, shop_domain])
+          UPDATE shops
+          SET access_token = ?,
+              uninstalled_at = ?,
+              scheduled_for_deletion_at = ?,
+              data_deletion_started_at = ?,
+              updated_at = ?
+          WHERE shop_domain = ?
+        SQL
+      end
+
+      shop(shop_domain)
+    end
+
+    def due_data_deletion_shops(reference_time: Time.now.utc.iso8601)
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [reference_time]).map { |row| hydrate_shop(row) }
+          SELECT * FROM shops
+          WHERE uninstalled_at IS NOT NULL
+            AND scheduled_for_deletion_at IS NOT NULL
+            AND scheduled_for_deletion_at <= ?
+            AND data_deletion_started_at IS NULL
+          ORDER BY scheduled_for_deletion_at ASC
+        SQL
+      end
+    end
+
+    def claim_shop_data_deletion(shop_domain, claimed_at: Time.now.utc.iso8601)
+      changed = @database.with_connection do |db|
+        db.execute(<<~SQL, [claimed_at, claimed_at, shop_domain, claimed_at])
+          UPDATE shops
+          SET data_deletion_started_at = ?, updated_at = ?
+          WHERE shop_domain = ?
+            AND uninstalled_at IS NOT NULL
+            AND scheduled_for_deletion_at IS NOT NULL
+            AND scheduled_for_deletion_at <= ?
+            AND data_deletion_started_at IS NULL
+        SQL
+        db.changes
+      end
+
+      changed == 1
+    end
+
+    def delete_shop_data(shop_domain)
+      @database.with_connection do |db|
+        db.execute("DELETE FROM sessions WHERE shop_domain = ?", shop_domain)
+        db.execute("DELETE FROM shops WHERE shop_domain = ?", shop_domain)
+      end
+
+      true
+    end
+
+    def claim_sync_command_lock(shop_domain, command_key, owner_id:, locked_at: Time.now.utc.iso8601)
+      changed = @database.with_connection do |db|
+        db.execute(<<~SQL, [shop_domain, command_key, owner_id, locked_at, locked_at])
+          INSERT OR IGNORE INTO sync_command_locks (
+            shop_domain, command_key, owner_id, locked_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?)
+        SQL
+        db.changes
+      end
+
+      changed == 1
+    end
+
+    def release_sync_command_lock(shop_domain, command_key, owner_id: nil)
+      @database.with_connection do |db|
+        if owner_id
+          db.execute(
+            "DELETE FROM sync_command_locks WHERE shop_domain = ? AND command_key = ? AND owner_id = ?",
+            [shop_domain, command_key, owner_id]
+          )
+        else
+          db.execute(
+            "DELETE FROM sync_command_locks WHERE shop_domain = ? AND command_key = ?",
+            [shop_domain, command_key]
+          )
+        end
+      end
+
+      true
+    end
+
+    def sync_command_lock(shop_domain, command_key)
+      @database.with_connection do |db|
+        db.get_first_row(
+          "SELECT * FROM sync_command_locks WHERE shop_domain = ? AND command_key = ?",
+          [shop_domain, command_key]
+        )
+      end
+    end
+
+    def enqueue_async_job_request(shop_domain:, request_type:, queue_name:, dedupe_key:, payload:, available_at: Time.now.utc.iso8601)
+      now = Time.now.utc.iso8601
+      request_id = SecureRandom.uuid
+      inserted = @database.with_connection do |db|
+        db.execute(<<~SQL, [request_id, shop_domain, request_type, queue_name, dedupe_key, JSON.generate(payload), "queued", 0, available_at, now, now])
+          INSERT OR IGNORE INTO async_job_requests (
+            id, shop_domain, request_type, queue_name, dedupe_key, payload, status,
+            attempts, available_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SQL
+        db.changes
+      end
+
+      if inserted == 1
+        async_job_request(request_id).merge("created" => true)
+      else
+        active_async_job_request_by_dedupe(dedupe_key).merge("created" => false)
+      end
+    end
+
+    def async_job_request(request_id)
+      @database.with_connection do |db|
+        hydrate_async_job_request(db.get_first_row("SELECT * FROM async_job_requests WHERE id = ?", request_id))
+      end
+    end
+
+    def active_async_job_request_by_dedupe(dedupe_key)
+      @database.with_connection do |db|
+        row = db.get_first_row(<<~SQL, [dedupe_key])
+          SELECT * FROM async_job_requests
+          WHERE dedupe_key = ?
+            AND status IN ('queued', 'claimed', 'dispatched', 'running')
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1
+        SQL
+        hydrate_async_job_request(row)
+      end
+    end
+
+    def latest_active_async_job_request(shop_domain, request_types: nil)
+      values = [shop_domain]
+      where = ["shop_domain = ?", "status IN ('queued', 'claimed', 'dispatched', 'running')"]
+
+      if request_types && !Array(request_types).empty?
+        types = Array(request_types).map(&:to_s)
+        where << "request_type IN (#{(['?'] * types.length).join(', ')})"
+        values.concat(types)
+      end
+
+      @database.with_connection do |db|
+        row = db.get_first_row(
+          "SELECT * FROM async_job_requests WHERE #{where.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT 1",
+          values
+        )
+        hydrate_async_job_request(row)
+      end
+    end
+
+    def due_async_job_requests(reference_time: Time.now.utc.iso8601, limit: 50)
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [reference_time, limit]).map { |row| hydrate_async_job_request(row) }
+          SELECT * FROM async_job_requests
+          WHERE status = 'queued' AND available_at <= ?
+          ORDER BY created_at ASC, rowid ASC
+          LIMIT ?
+        SQL
+      end
+    end
+
+    def failed_async_job_requests(shop_domain: nil, limit: 50)
+      values = []
+      where = ["status = 'failed'"]
+
+      if shop_domain
+        where << "shop_domain = ?"
+        values << shop_domain
+      end
+
+      values << limit
+      @database.with_connection do |db|
+        db.execute(
+          "SELECT * FROM async_job_requests WHERE #{where.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+          values
+        ).map { |row| hydrate_async_job_request(row) }
+      end
+    end
+
+    def latest_failed_async_job_request(shop_domain:)
+      @database.with_connection do |db|
+        row = db.get_first_row(<<~SQL, [shop_domain])
+          SELECT * FROM async_job_requests
+          WHERE shop_domain = ?
+            AND status = 'failed'
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1
+        SQL
+        hydrate_async_job_request(row)
+      end
+    end
+
+    def async_job_request_status_counts(shop_domain:)
+      counts = Hash.new(0)
+
+      @database.with_connection do |db|
+        db.execute(
+          "SELECT status, COUNT(*) AS count FROM async_job_requests WHERE shop_domain = ? GROUP BY status",
+          [shop_domain]
+        ).each do |row|
+          counts[row["status"]] = row["count"].to_i
+        end
+      end
+
+      counts
+    end
+
+    def async_job_request_count(shop_domain:, statuses: nil)
+      values = [shop_domain]
+      where = ["shop_domain = ?"]
+
+      if statuses && !Array(statuses).empty?
+        normalized_statuses = Array(statuses).map(&:to_s)
+        where << "status IN (#{(['?'] * normalized_statuses.length).join(', ')})"
+        values.concat(normalized_statuses)
+      end
+
+      @database.with_connection do |db|
+        db.get_first_value("SELECT COUNT(*) FROM async_job_requests WHERE #{where.join(' AND ')}", values).to_i
+      end
+    end
+
+    def async_job_requests(shop_domain:, statuses: nil, limit: 20, offset: 0)
+      values = [shop_domain]
+      where = ["shop_domain = ?"]
+
+      if statuses && !Array(statuses).empty?
+        normalized_statuses = Array(statuses).map(&:to_s)
+        where << "status IN (#{(['?'] * normalized_statuses.length).join(', ')})"
+        values.concat(normalized_statuses)
+      end
+
+      values << limit.to_i
+      values << offset.to_i
+      @database.with_connection do |db|
+        db.execute(
+          "SELECT * FROM async_job_requests WHERE #{where.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+          values
+        ).map { |row| hydrate_async_job_request(row) }
+      end
+    end
+
+    def claim_async_job_request(request_id, worker_id:, claimed_at: Time.now.utc.iso8601)
+      changed = @database.with_connection do |db|
+        db.execute(<<~SQL, [worker_id, claimed_at, claimed_at, request_id, claimed_at])
+          UPDATE async_job_requests
+          SET status = 'claimed',
+              attempts = attempts + 1,
+              claimed_by = ?,
+              claimed_at = ?,
+              updated_at = ?
+          WHERE id = ?
+            AND status = 'queued'
+            AND available_at <= ?
+        SQL
+        db.changes
+      end
+
+      changed == 1
+    end
+
+    def mark_async_job_request_dispatched(request_id, dispatched_at: Time.now.utc.iso8601)
+      update_async_job_request_status(
+        request_id,
+        status: "dispatched",
+        attributes: {
+          "dispatched_at" => dispatched_at,
+          "error_message" => nil
+        }
+      )
+    end
+
+    def mark_async_job_request_running(request_id)
+      return nil unless request_id
+
+      update_async_job_request_status(request_id, status: "running")
+    end
+
+    def complete_async_job_request(request_id)
+      return nil unless request_id
+
+      update_async_job_request_status(request_id, status: "completed", attributes: { "error_message" => nil })
+    end
+
+    def fail_async_job_request(request_id, error_message)
+      return nil unless request_id
+
+      update_async_job_request_status(request_id, status: "failed", attributes: { "error_message" => error_message })
+    end
+
+    def requeue_async_job_request(request_id, error_message:, available_at: Time.now.utc.iso8601)
+      now = Time.now.utc.iso8601
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [available_at, error_message, now, request_id])
+          UPDATE async_job_requests
+          SET status = 'queued',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              dispatched_at = NULL,
+              available_at = ?,
+              error_message = ?,
+              updated_at = ?
+          WHERE id = ?
+        SQL
+      end
+
+      async_job_request(request_id)
+    end
+
+    def retry_failed_async_job_request(request_id, available_at: Time.now.utc.iso8601)
+      now = Time.now.utc.iso8601
+      changed = @database.with_connection do |db|
+        db.execute(<<~SQL, [available_at, now, request_id])
+          UPDATE async_job_requests
+          SET status = 'queued',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              dispatched_at = NULL,
+              error_message = NULL,
+              available_at = ?,
+              updated_at = ?
+          WHERE id = ?
+            AND status = 'failed'
+        SQL
+        db.changes
+      end
+
+      changed == 1 ? async_job_request(request_id) : nil
+    end
+
+    def retry_latest_failed_async_job_request(shop_domain:, available_at: Time.now.utc.iso8601)
+      request = latest_failed_async_job_request(shop_domain: shop_domain)
+      return nil unless request
+
+      retry_failed_async_job_request(request["id"], available_at: available_at)
+    end
+
+    def retry_all_failed_async_job_requests(shop_domain:, available_at: Time.now.utc.iso8601)
+      now = Time.now.utc.iso8601
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [available_at, now, shop_domain])
+          UPDATE async_job_requests
+          SET status = 'queued',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              dispatched_at = NULL,
+              error_message = NULL,
+              available_at = ?,
+              updated_at = ?
+          WHERE shop_domain = ?
+            AND status = 'failed'
+        SQL
+        db.changes
+      end
+    end
+
+    def delete_async_job_request(request_id, allowed_statuses: nil)
+      values = [request_id]
+      where = ["id = ?"]
+
+      if allowed_statuses && !Array(allowed_statuses).empty?
+        statuses = Array(allowed_statuses).map(&:to_s)
+        where << "status IN (#{(['?'] * statuses.length).join(', ')})"
+        values.concat(statuses)
+      end
+
+      changed = @database.with_connection do |db|
+        db.execute("DELETE FROM async_job_requests WHERE #{where.join(' AND ')}", values)
+        db.changes
+      end
+
+      changed == 1
     end
 
     def update_shop(shop_domain, attributes)
@@ -72,6 +456,11 @@ module SendInvoice
       updates = []
       values = []
       normalized = normalize_keys(attributes)
+      if present?(normalized["access_token"])
+        normalized["uninstalled_at"] = nil unless normalized.key?("uninstalled_at")
+        normalized["scheduled_for_deletion_at"] = nil unless normalized.key?("scheduled_for_deletion_at")
+        normalized["data_deletion_started_at"] = nil unless normalized.key?("data_deletion_started_at")
+      end
 
       normalized.each do |key, value|
         case key
@@ -364,6 +753,32 @@ module SendInvoice
       end
     end
 
+    def bulk_sync_job_by_operation(shop_domain, operation_id)
+      @database.with_connection do |db|
+        row = db.get_first_row(
+          "SELECT * FROM bulk_sync_jobs WHERE shop_domain = ? AND shopify_bulk_operation_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+          [shop_domain, operation_id]
+        )
+        hydrate_bulk_sync_job(row)
+      end
+    end
+
+    def claim_bulk_sync_job(job_id, from_statuses:, status:)
+      statuses = Array(from_statuses).map(&:to_s)
+      return false if statuses.empty?
+
+      placeholders = (["?"] * statuses.length).join(", ")
+      changed = @database.with_connection do |db|
+        db.execute(
+          "UPDATE bulk_sync_jobs SET status = ?, updated_at = ? WHERE id = ? AND status IN (#{placeholders})",
+          [status, Time.now.utc.iso8601, job_id] + statuses
+        )
+        db.changes
+      end
+
+      changed == 1
+    end
+
     def latest_bulk_sync_job(shop_domain)
       @database.with_connection do |db|
         row = db.get_first_row("SELECT * FROM bulk_sync_jobs WHERE shop_domain = ? ORDER BY started_at DESC, rowid DESC LIMIT 1", shop_domain)
@@ -484,6 +899,25 @@ module SendInvoice
       end
     end
 
+    def retry_failed_batch_log(batch_id)
+      now = Time.now.utc.iso8601
+      changed = @database.with_connection do |db|
+        db.execute(<<~SQL, [now, batch_id])
+          UPDATE batch_logs
+          SET status = 'pending',
+              error_message = NULL,
+              started_at = NULL,
+              completed_at = NULL,
+              updated_at = ?
+          WHERE id = ?
+            AND status = 'failed'
+        SQL
+        db.changes
+      end
+
+      changed == 1 ? batch_log(batch_id) : nil
+    end
+
     def batch_summary(shop_domain, sync_type: "first_time_sync")
       rows = batch_logs(shop_domain, sync_type: sync_type)
       grouped = rows.group_by { |batch| batch["batch_type"] }
@@ -524,6 +958,27 @@ module SendInvoice
 
     private
 
+    def update_async_job_request_status(request_id, status:, attributes: {})
+      normalized = normalize_keys(attributes)
+      updates = ["status = ?"]
+      values = [status]
+
+      normalized.each do |key, value|
+        updates << "#{key} = ?"
+        values << value
+      end
+
+      updates << "updated_at = ?"
+      values << Time.now.utc.iso8601
+      values << request_id
+
+      @database.with_connection do |db|
+        db.execute("UPDATE async_job_requests SET #{updates.join(', ')} WHERE id = ?", values)
+      end
+
+      async_job_request(request_id)
+    end
+
     def normalize_keys(attributes)
       attributes.each_with_object({}) do |(key, value), memo|
         memo[key.to_s] = value
@@ -553,6 +1008,9 @@ module SendInvoice
         "scopes" => row["scopes"],
         "owner_email" => row["owner_email"],
         "installed_at" => row["installed_at"],
+        "uninstalled_at" => row["uninstalled_at"],
+        "scheduled_for_deletion_at" => row["scheduled_for_deletion_at"],
+        "data_deletion_started_at" => row["data_deletion_started_at"],
         "updated_at" => row["updated_at"],
         "onboarded" => row["onboarded"].to_i == 1,
         "current_plan" => row["current_plan"],
@@ -673,6 +1131,28 @@ module SendInvoice
         "error_message" => row["error_message"],
         "started_at" => row["started_at"],
         "completed_at" => row["completed_at"],
+        "created_at" => row["created_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def hydrate_async_job_request(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => row["shop_domain"],
+        "request_type" => row["request_type"],
+        "queue_name" => row["queue_name"],
+        "dedupe_key" => row["dedupe_key"],
+        "payload" => JSON.parse(row["payload"].to_s),
+        "status" => row["status"],
+        "attempts" => row["attempts"].to_i,
+        "claimed_by" => row["claimed_by"],
+        "claimed_at" => row["claimed_at"],
+        "available_at" => row["available_at"],
+        "dispatched_at" => row["dispatched_at"],
+        "error_message" => row["error_message"],
         "created_at" => row["created_at"],
         "updated_at" => row["updated_at"]
       }

@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SIDECAR_DIR="$ROOT_DIR/worker_sidecar"
+
+normalize_queue_adapter() {
+  case "${1:-sqlite3}" in
+    postgresql|postgres|pg)
+      printf 'postgresql\n'
+      ;;
+    ""|sqlite|sqlite3)
+      printf 'sqlite3\n'
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+queue_freshness_seconds() {
+  printf '%s\n' "${QUEUE_HEALTH_FRESHNESS_SECONDS:-30}"
+}
+
+validate_postgres_queue_env() {
+  if [[ -n "${SEND_INVOICE_QUEUE_DATABASE_URL:-}" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${SEND_INVOICE_QUEUE_DB_NAME:-}" ]]; then
+    echo "Postgres queue mode requires SEND_INVOICE_QUEUE_DATABASE_URL or SEND_INVOICE_QUEUE_DB_NAME"
+    return 1
+  fi
+}
+
+sqlite_queue_has_process_table() {
+  local table_exists
+  table_exists="$(
+    sqlite3 -readonly "$SEND_INVOICE_QUEUE_DATABASE_PATH" \
+      "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'solid_queue_processes';" \
+      2>/dev/null || true
+  )"
+  [[ "$table_exists" == "1" ]]
+}
+
+find_fresh_sqlite_supervisors() {
+  sqlite3 -readonly -noheader -separator '|' "$SEND_INVOICE_QUEUE_DATABASE_PATH" <<SQL
+SELECT
+  pid,
+  hostname,
+  name,
+  CASE
+    WHEN CAST(strftime('%s', 'now') - strftime('%s', last_heartbeat_at) AS INTEGER) < 0 THEN 0
+    ELSE CAST(strftime('%s', 'now') - strftime('%s', last_heartbeat_at) AS INTEGER)
+  END AS heartbeat_age_seconds,
+  last_heartbeat_at
+FROM solid_queue_processes
+WHERE kind LIKE 'Supervisor%'
+  AND CASE
+    WHEN CAST(strftime('%s', 'now') - strftime('%s', last_heartbeat_at) AS INTEGER) < 0 THEN 0
+    ELSE CAST(strftime('%s', 'now') - strftime('%s', last_heartbeat_at) AS INTEGER)
+  END <= $(queue_freshness_seconds)
+ORDER BY last_heartbeat_at DESC, id DESC;
+SQL
+}
+
+assert_no_duplicate_sqlite_sidecar() {
+  local existing_supervisors
+
+  if [[ "${SEND_INVOICE_ALLOW_DUPLICATE_SIDECARS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "sqlite3 is required to enforce the duplicate-sidecar startup guard"
+    echo "Set SEND_INVOICE_ALLOW_DUPLICATE_SIDECARS=1 only if you intentionally need to bypass it"
+    return 1
+  fi
+
+  if [[ ! -f "$SEND_INVOICE_QUEUE_DATABASE_PATH" ]]; then
+    return 0
+  fi
+
+  if ! sqlite_queue_has_process_table; then
+    return 0
+  fi
+
+  if ! existing_supervisors="$(find_fresh_sqlite_supervisors 2>&1)"; then
+    echo "Unable to inspect SQLite queue DB for duplicate sidecars:"
+    echo "$existing_supervisors"
+    echo "Set SEND_INVOICE_ALLOW_DUPLICATE_SIDECARS=1 only if you intentionally need to bypass this guard"
+    return 1
+  fi
+
+  if [[ -n "$existing_supervisors" ]]; then
+    echo "Refusing to start a second SQLite sidecar for queue DB: $SEND_INVOICE_QUEUE_DATABASE_PATH"
+    echo "Fresh supervisor heartbeat(s) already exist within $(queue_freshness_seconds)s:"
+    while IFS='|' read -r pid hostname name heartbeat_age_seconds last_heartbeat_at; do
+      [[ -z "${pid:-}" ]] && continue
+      echo "  pid=$pid host=$hostname name=$name heartbeat_age_seconds=$heartbeat_age_seconds last_heartbeat_at=$last_heartbeat_at"
+    done <<<"$existing_supervisors"
+    echo "Stop the existing sidecar first, or set SEND_INVOICE_ALLOW_DUPLICATE_SIDECARS=1 to bypass this guard intentionally"
+    return 1
+  fi
+}
+
+if command -v brew >/dev/null 2>&1; then
+  if ruby_prefix="$(brew --prefix ruby@3.2 2>/dev/null)"; then
+    export PATH="$ruby_prefix/bin:$PATH"
+  fi
+fi
+
+cd "$SIDECAR_DIR"
+
+export SEND_INVOICE_DATABASE_PATH="${SEND_INVOICE_DATABASE_PATH:-$ROOT_DIR/ruby_app/db/send_invoice.sqlite3}"
+export RAILS_ENV="${RAILS_ENV:-development}"
+export SOLID_QUEUE_SUPERVISOR_MODE="${SOLID_QUEUE_SUPERVISOR_MODE:-async}"
+export SEND_INVOICE_QUEUE_DB_ADAPTER="$(normalize_queue_adapter "${SEND_INVOICE_QUEUE_DB_ADAPTER:-sqlite3}")"
+
+if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+  export SEND_INVOICE_QUEUE_DATABASE_PATH="${SEND_INVOICE_QUEUE_DATABASE_PATH:-$SIDECAR_DIR/storage/development_queue.sqlite3}"
+else
+  validate_postgres_queue_env
+fi
+
+if [[ "$RAILS_ENV" == "development" ]]; then
+  export RAILS_MAX_THREADS="${RAILS_MAX_THREADS:-4}"
+  export SEND_INVOICE_SQLITE_TIMEOUT="${SEND_INVOICE_SQLITE_TIMEOUT:-30000}"
+  export SEND_INVOICE_WORKER_LOG_LEVEL="${SEND_INVOICE_WORKER_LOG_LEVEL:-info}"
+  export SEND_INVOICE_WORKER_SQL_LOG="${SEND_INVOICE_WORKER_SQL_LOG:-0}"
+  export SEND_INVOICE_QUEUE_HEARTBEAT_INTERVAL_SECONDS="${SEND_INVOICE_QUEUE_HEARTBEAT_INTERVAL_SECONDS:-10}"
+  if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+    export SEND_INVOICE_ENABLE_INCREMENTAL_SYNC_RECURRING="${SEND_INVOICE_ENABLE_INCREMENTAL_SYNC_RECURRING:-0}"
+    export SEND_INVOICE_ENABLE_UNINSTALL_CLEANUP_RECURRING="${SEND_INVOICE_ENABLE_UNINSTALL_CLEANUP_RECURRING:-0}"
+  fi
+fi
+
+if [[ ! -x "$SIDECAR_DIR/bin/jobs" ]]; then
+  echo "Missing worker_sidecar/bin/jobs"
+  echo "Run bin/setup-worker-sidecar first from the repo root"
+  exit 1
+fi
+
+if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+  assert_no_duplicate_sqlite_sidecar
+fi
+
+echo "Starting Solid Queue sidecar"
+echo "RAILS_ENV=$RAILS_ENV"
+echo "SEND_INVOICE_QUEUE_DB_ADAPTER=$SEND_INVOICE_QUEUE_DB_ADAPTER"
+echo "SEND_INVOICE_DATABASE_PATH=$SEND_INVOICE_DATABASE_PATH"
+if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+  echo "SEND_INVOICE_QUEUE_DATABASE_PATH=$SEND_INVOICE_QUEUE_DATABASE_PATH"
+else
+  echo "SEND_INVOICE_QUEUE_DATABASE_URL=${SEND_INVOICE_QUEUE_DATABASE_URL:+set}"
+  echo "SEND_INVOICE_QUEUE_DB_HOST=${SEND_INVOICE_QUEUE_DB_HOST:-127.0.0.1}"
+  echo "SEND_INVOICE_QUEUE_DB_PORT=${SEND_INVOICE_QUEUE_DB_PORT:-5432}"
+  echo "SEND_INVOICE_QUEUE_DB_NAME=${SEND_INVOICE_QUEUE_DB_NAME:-}"
+  echo "SEND_INVOICE_QUEUE_DB_USER=${SEND_INVOICE_QUEUE_DB_USER:-}"
+fi
+echo "SOLID_QUEUE_SUPERVISOR_MODE=$SOLID_QUEUE_SUPERVISOR_MODE"
+echo "RAILS_MAX_THREADS=${RAILS_MAX_THREADS:-}"
+echo "SEND_INVOICE_SQLITE_TIMEOUT=${SEND_INVOICE_SQLITE_TIMEOUT:-}"
+echo "SEND_INVOICE_WORKER_LOG_LEVEL=${SEND_INVOICE_WORKER_LOG_LEVEL:-}"
+echo "SEND_INVOICE_WORKER_SQL_LOG=${SEND_INVOICE_WORKER_SQL_LOG:-}"
+echo "SEND_INVOICE_QUEUE_HEARTBEAT_INTERVAL_SECONDS=${SEND_INVOICE_QUEUE_HEARTBEAT_INTERVAL_SECONDS:-}"
+if [[ "$RAILS_ENV" == "development" && "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
+  echo "QUEUE_HEALTH_FRESHNESS_SECONDS=$(queue_freshness_seconds)"
+  echo "SEND_INVOICE_ENABLE_INCREMENTAL_SYNC_RECURRING=${SEND_INVOICE_ENABLE_INCREMENTAL_SYNC_RECURRING:-}"
+  echo "SEND_INVOICE_ENABLE_UNINSTALL_CLEANUP_RECURRING=${SEND_INVOICE_ENABLE_UNINSTALL_CLEANUP_RECURRING:-}"
+  echo "SEND_INVOICE_ALLOW_DUPLICATE_SIDECARS=${SEND_INVOICE_ALLOW_DUPLICATE_SIDECARS:-0}"
+fi
+
+exec ./bin/jobs start --mode "$SOLID_QUEUE_SUPERVISOR_MODE"
