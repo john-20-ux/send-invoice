@@ -19,6 +19,10 @@ dist-ssr
 ruby_app/db/*.sqlite3
 vendor/bundle
 .bundle
+worker_sidecar/storage/
+worker_sidecar/tmp/
+worker_sidecar/log/
+worker_sidecar/vendor/
 
 # Editor directories and files
 .vscode/*
