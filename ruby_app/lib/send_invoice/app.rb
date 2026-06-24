@@ -582,18 +582,19 @@ module SendInvoice
       %w[
         template currency_symbol company_name tagline address phone email website gst
         bill_to client_address client_email invoice_number invoice_date due_date
-        payment_terms notes bank_details terms
+        payment_terms notes bank_details terms accent_color surface_tone
+        font_family density header_align logo_text
       ].each do |key|
         config[key] = single_value(params[key]).to_s
       end
 
       visible = config["visible_fields"] || {}
-      %w[website terms].each do |field|
+      %w[website terms gst notes bank_details].each do |field|
         visible[field] = single_value(params["visible_#{field}"]) == "1"
       end
       config["visible_fields"] = visible
 
-      config["line_items"] = 2.times.map do |index|
+      config["line_items"] = 4.times.map do |index|
         {
           "desc" => single_value(params["line_desc_#{index}"]).to_s,
           "qty" => single_value(params["line_qty_#{index}"]).to_f,
@@ -601,7 +602,17 @@ module SendInvoice
           "discount" => single_value(params["line_discount_#{index}"]).to_f,
           "tax" => single_value(params["line_tax_#{index}"]).to_f
         }
+      end.reject do |line_item|
+        line_item["desc"].strip.empty? &&
+          line_item["qty"].zero? &&
+          line_item["rate"].zero? &&
+          line_item["discount"].zero? &&
+          line_item["tax"].zero?
       end
+
+      config["line_items"] = [
+        { "desc" => "", "qty" => 1, "rate" => 0.0, "discount" => 0.0, "tax" => 0.0 }
+      ] if config["line_items"].empty?
 
       @store.update_shop(shop["shop_domain"], "invoice_template_config" => config)
       flash!("info", "Invoice template updated.")

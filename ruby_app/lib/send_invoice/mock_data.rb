@@ -63,6 +63,12 @@ module SendInvoice
     DEFAULT_INVOICE_TEMPLATE_CONFIG = {
       "template" => "classic",
       "currency_symbol" => "$",
+      "accent_color" => "#147c64",
+      "surface_tone" => "paper",
+      "font_family" => "\"IBM Plex Sans\", \"Aptos\", \"Segoe UI\", sans-serif",
+      "density" => "comfortable",
+      "header_align" => "split",
+      "logo_text" => "AS",
       "company_name" => "Acme Store",
       "tagline" => "Quality products delivered",
       "address" => "123 Commerce St, Suite 4",
@@ -82,11 +88,15 @@ module SendInvoice
       "terms" => "Payment due within 30 days.",
       "visible_fields" => {
         "website" => false,
-        "terms" => false
+        "terms" => false,
+        "gst" => true,
+        "notes" => true,
+        "bank_details" => true
       },
       "line_items" => [
         { "desc" => "Wireless Earbuds Pro", "qty" => 2, "rate" => 89.99, "discount" => 0.0, "tax" => 10.0 },
-        { "desc" => "Premium Dog Harness", "qty" => 1, "rate" => 45.0, "discount" => 5.0, "tax" => 10.0 }
+        { "desc" => "Premium Dog Harness", "qty" => 1, "rate" => 45.0, "discount" => 5.0, "tax" => 10.0 },
+        { "desc" => "Support and handling", "qty" => 1, "rate" => 18.0, "discount" => 0.0, "tax" => 0.0 }
       ]
     }.freeze
 

@@ -98,6 +98,9 @@ class SendInvoiceAppTest < Minitest::Test
     assert_includes response.body, 'data-preview-template'
     assert_includes response.body, 'data-template="classic"'
     assert_includes response.body, 'data-role="template-style-label"'
+    assert_includes response.body, 'data-preview-style="accent_color"'
+    assert_includes response.body, 'data-role="preview-line-items-body"'
+    assert_includes response.body, 'data-template-choice="editorial"'
   end
 
   def test_queue_ops_page_renders_history_and_diagnostics

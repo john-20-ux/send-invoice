@@ -382,31 +382,151 @@
     var preview = $("#invoice-preview");
     if (!form || !preview) return;
 
+    function titleCase(value) {
+      return (value || "")
+        .split(/[_\s-]+/)
+        .filter(Boolean)
+        .map(function (part) {
+          return part.charAt(0).toUpperCase() + part.slice(1);
+        })
+        .join(" ");
+    }
+
+    function formatCurrency(symbol, amount) {
+      return (symbol || "$") + Number(amount || 0).toFixed(2);
+    }
+
+    function lineItems() {
+      var rows = {};
+      form.querySelectorAll("[data-line-item-index]").forEach(function (field) {
+        var index = field.getAttribute("data-line-item-index");
+        var key = field.getAttribute("data-line-item-field");
+        rows[index] = rows[index] || { desc: "", qty: 0, rate: 0, discount: 0, tax: 0 };
+        if (key === "desc") {
+          rows[index][key] = field.value || "";
+        } else {
+          rows[index][key] = Number(field.value || 0);
+        }
+      });
+      return Object.keys(rows)
+        .sort()
+        .map(function (key) {
+          return rows[key];
+        });
+    }
+
+    function renderLineItems() {
+      var tbody = $('[data-role="preview-line-items-body"]', preview);
+      var subtotalNode = $('[data-role="preview-subtotal"]', preview);
+      var taxNode = $('[data-role="preview-tax"]', preview);
+      var totalNode = $('[data-role="preview-total"]', preview);
+      var currencyField = $("#currency_symbol", form);
+      var symbol = currencyField ? currencyField.value : "$";
+      var subtotal = 0;
+      var taxTotal = 0;
+      var items = lineItems().filter(function (item) {
+        return item.desc.trim() !== "" || item.qty > 0 || item.rate > 0;
+      });
+
+      if (tbody) tbody.innerHTML = "";
+
+      if (!items.length && tbody) {
+        var emptyRow = document.createElement("tr");
+        emptyRow.innerHTML = '<td colspan="4" class="muted">Add line items to build this invoice.</td>';
+        tbody.appendChild(emptyRow);
+      }
+
+      items.forEach(function (item) {
+        var base = item.qty * item.rate;
+        var discounted = base - (base * item.discount / 100);
+        var taxAmount = discounted * item.tax / 100;
+        subtotal += discounted;
+        taxTotal += taxAmount;
+
+        if (!tbody) return;
+        var row = document.createElement("tr");
+        var desc = document.createElement("td");
+        desc.textContent = item.desc || "Untitled item";
+        var qty = document.createElement("td");
+        qty.className = "align-right";
+        qty.textContent = String(item.qty);
+        var rate = document.createElement("td");
+        rate.className = "align-right";
+        rate.textContent = formatCurrency(symbol, item.rate);
+        var amount = document.createElement("td");
+        amount.className = "align-right";
+        amount.textContent = formatCurrency(symbol, discounted);
+        row.appendChild(desc);
+        row.appendChild(qty);
+        row.appendChild(rate);
+        row.appendChild(amount);
+        tbody.appendChild(row);
+      });
+
+      if (subtotalNode) subtotalNode.textContent = formatCurrency(symbol, subtotal);
+      if (taxNode) taxNode.textContent = formatCurrency(symbol, taxTotal);
+      if (totalNode) totalNode.textContent = formatCurrency(symbol, subtotal + taxTotal);
+    }
+
     function applyTemplateStyle(value) {
       var template = value || "classic";
       preview.dataset.template = template;
       var label = $('[data-role="template-style-label"]', preview);
       if (label) {
-        label.textContent = template.charAt(0).toUpperCase() + template.slice(1);
+        label.textContent = titleCase(template);
       }
+      form.querySelectorAll("[data-template-choice]").forEach(function (item) {
+        item.classList.toggle("is-active", item.getAttribute("data-template-choice") === template);
+      });
     }
 
-    form.querySelectorAll("[data-preview-text]").forEach(function (field) {
-      field.addEventListener("input", function () {
+    function bindPreviewText(field) {
+      function update() {
         var key = field.getAttribute("data-preview-text");
         preview.querySelectorAll('[data-preview-key="' + key + '"]').forEach(function (node) {
           node.textContent = field.value || "-";
         });
-      });
+      }
+
+      field.addEventListener("input", update);
+      field.addEventListener("change", update);
+    }
+
+    form.querySelectorAll("[data-preview-text]").forEach(function (field) {
+      bindPreviewText(field);
     });
 
     form.querySelectorAll("[data-preview-toggle]").forEach(function (field) {
-      field.addEventListener("change", function () {
+      function updateToggle() {
         var key = field.getAttribute("data-preview-toggle");
         preview.querySelectorAll('[data-visibility-key="' + key + '"]').forEach(function (node) {
           node.hidden = !field.checked;
         });
-      });
+      }
+
+      field.addEventListener("change", updateToggle);
+      updateToggle();
+    });
+
+    form.querySelectorAll("[data-preview-style]").forEach(function (field) {
+      function applyStyle() {
+        var styleKey = field.getAttribute("data-preview-style");
+        if (styleKey === "accent_color") {
+          preview.style.setProperty("--invoice-accent", field.value || "#147c64");
+        } else if (styleKey === "font_family") {
+          preview.style.setProperty("--invoice-font", field.value || '"IBM Plex Sans", "Aptos", "Segoe UI", sans-serif');
+        } else if (styleKey === "surface_tone") {
+          preview.dataset.surfaceTone = field.value || "paper";
+        } else if (styleKey === "density") {
+          preview.dataset.density = field.value || "comfortable";
+        } else if (styleKey === "header_align") {
+          preview.dataset.headerAlign = field.value || "split";
+        }
+      }
+
+      field.addEventListener("input", applyStyle);
+      field.addEventListener("change", applyStyle);
+      applyStyle();
     });
 
     var templateSelect = form.querySelector("[data-preview-template]");
@@ -416,6 +536,29 @@
         applyTemplateStyle(templateSelect.value);
       });
     }
+
+    form.querySelectorAll("[data-template-choice]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var template = button.getAttribute("data-template-choice");
+        if (templateSelect) {
+          templateSelect.value = template;
+          applyTemplateStyle(template);
+        }
+      });
+    });
+
+    form.querySelectorAll("[data-line-item-index]").forEach(function (field) {
+      field.addEventListener("input", renderLineItems);
+      field.addEventListener("change", renderLineItems);
+    });
+
+    var currencyField = $("#currency_symbol", form);
+    if (currencyField) {
+      currencyField.addEventListener("change", renderLineItems);
+      currencyField.addEventListener("input", renderLineItems);
+    }
+
+    renderLineItems();
   }
 
   bootSyncPolling();

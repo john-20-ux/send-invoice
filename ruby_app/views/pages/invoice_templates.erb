@@ -1,95 +1,246 @@
+<%
+  template_options = [
+    ["classic", "Classic"],
+    ["modern", "Modern"],
+    ["minimal", "Minimal"],
+    ["bold", "Bold"],
+    ["clean", "Clean"],
+    ["compact", "Compact"],
+    ["editorial", "Editorial"],
+    ["ledger", "Ledger"],
+    ["luxe", "Luxe"],
+    ["mono", "Mono"]
+  ]
+  line_items = Array(@invoice_config["line_items"]).map do |item|
+    {
+      "desc" => item["desc"].to_s,
+      "qty" => item["qty"].to_f,
+      "rate" => item["rate"].to_f,
+      "discount" => item["discount"].to_f,
+      "tax" => item["tax"].to_f
+    }
+  end
+  while line_items.length < 4
+    line_items << { "desc" => "", "qty" => (line_items.empty? ? 1 : 0), "rate" => 0.0, "discount" => 0.0, "tax" => 0.0 }
+  end
+  line_items = line_items.first(4)
+  symbol = @invoice_config["currency_symbol"]
+  line_subtotal = line_items.sum do |line_item|
+    quantity = line_item["qty"].to_f
+    rate = line_item["rate"].to_f
+    base = quantity * rate
+    base - (base * line_item["discount"].to_f / 100.0)
+  end
+  line_tax = line_items.sum do |line_item|
+    quantity = line_item["qty"].to_f
+    rate = line_item["rate"].to_f
+    base = quantity * rate
+    discounted = base - (base * line_item["discount"].to_f / 100.0)
+    discounted * line_item["tax"].to_f / 100.0
+  end
+%>
+
 <form method="post" action="/invoice-templates" id="invoice-template-form" class="split-layout">
-  <section class="section-card stack">
+  <section class="section-card stack invoice-editor-shell">
     <div>
-      <p class="eyebrow">Editor</p>
+      <p class="eyebrow">Studio</p>
       <h2>Invoice template</h2>
-      <p class="section-note">Edit the default invoice copy and preview the printable output.</p>
+      <p class="section-note">Switch styles, tune layout controls, and see the invoice update live before you save.</p>
     </div>
 
-    <div class="field">
-      <label for="template">Template style</label>
-      <select id="template" name="template" data-preview-template>
-        <% %w[classic modern minimal bold clean compact].each do |template| %>
-          <option value="<%= template %>" <%= @invoice_config["template"] == template ? "selected" : "" %>><%= template.capitalize %></option>
+    <section class="preview-card stack">
+      <div>
+        <p class="eyebrow">Template family</p>
+        <h3>Style presets</h3>
+      </div>
+      <div class="template-preset-grid">
+        <% template_options.each do |value, label| %>
+          <button
+            class="template-preset <%= "is-active" if @invoice_config["template"] == value %>"
+            type="button"
+            data-template-choice="<%= value %>"
+          >
+            <span class="template-preset-name"><%= label %></span>
+            <span class="template-preset-meta"><%= value %></span>
+          </button>
         <% end %>
-      </select>
-    </div>
+      </div>
 
-    <% {
-      "company_name" => "Company name",
-      "tagline" => "Tagline",
-      "address" => "Address",
-      "phone" => "Phone",
-      "email" => "Email",
-      "website" => "Website",
-      "gst" => "GST or VAT number",
-      "bill_to" => "Bill to",
-      "client_address" => "Client address",
-      "client_email" => "Client email",
-      "invoice_number" => "Invoice number",
-      "invoice_date" => "Invoice date",
-      "due_date" => "Due date",
-      "payment_terms" => "Payment terms",
-      "notes" => "Notes",
-      "bank_details" => "Bank details",
-      "terms" => "Terms and conditions"
-    }.each do |key, label| %>
       <div class="field">
-        <label for="<%= key %>"><%= label %></label>
-        <% if %w[address notes bank_details terms].include?(key) %>
-          <textarea id="<%= key %>" name="<%= key %>" data-preview-text="<%= key %>"><%= h(@invoice_config[key]) %></textarea>
-        <% else %>
-          <input id="<%= key %>" name="<%= key %>" type="text" value="<%= h(@invoice_config[key]) %>" data-preview-text="<%= key %>">
-        <% end %>
+        <label for="template">Template style</label>
+        <select id="template" name="template" data-preview-template>
+          <% template_options.each do |value, label| %>
+            <option value="<%= value %>" <%= @invoice_config["template"] == value ? "selected" : "" %>><%= label %></option>
+          <% end %>
+        </select>
       </div>
-    <% end %>
+    </section>
 
-    <div class="field">
-      <label for="currency_symbol">Currency symbol</label>
-      <select id="currency_symbol" name="currency_symbol" data-preview-text="currency_symbol">
-        <% ["$", "EUR ", "GBP ", "INR "].each do |symbol| %>
-          <option value="<%= symbol %>" <%= @invoice_config["currency_symbol"] == symbol ? "selected" : "" %>><%= symbol %></option>
-        <% end %>
-      </select>
-    </div>
-
-    <div class="checkbox-row">
-      <input id="visible_website" name="visible_website" type="checkbox" value="1" data-preview-toggle="website" <%= @invoice_config.dig("visible_fields", "website") ? "checked" : "" %>>
-      <label for="visible_website">Show website</label>
-    </div>
-
-    <div class="checkbox-row">
-      <input id="visible_terms" name="visible_terms" type="checkbox" value="1" data-preview-toggle="terms" <%= @invoice_config.dig("visible_fields", "terms") ? "checked" : "" %>>
-      <label for="visible_terms">Show terms and conditions</label>
-    </div>
-
-    <% @invoice_config["line_items"].each_with_index do |line_item, index| %>
-      <div class="preview-card">
-        <h3>Line item <%= index + 1 %></h3>
-        <div class="field" style="margin-top:10px">
-          <label>Description</label>
-          <input type="text" name="line_desc_<%= index %>" value="<%= h(line_item["desc"]) %>">
+    <section class="preview-card stack">
+      <div>
+        <p class="eyebrow">Brand</p>
+        <h3>Visual controls</h3>
+      </div>
+      <div class="style-tool-grid">
+        <div class="field">
+          <label for="accent_color">Accent color</label>
+          <input id="accent_color" name="accent_color" type="color" value="<%= h(@invoice_config["accent_color"]) %>" data-preview-style="accent_color">
         </div>
-        <div class="grid-two" style="margin-top:10px">
-          <div class="field">
-            <label>Qty</label>
-            <input type="number" step="1" name="line_qty_<%= index %>" value="<%= line_item["qty"] %>">
-          </div>
-          <div class="field">
-            <label>Rate</label>
-            <input type="number" step="0.01" name="line_rate_<%= index %>" value="<%= line_item["rate"] %>">
-          </div>
-          <div class="field">
-            <label>Discount %</label>
-            <input type="number" step="0.01" name="line_discount_<%= index %>" value="<%= line_item["discount"] %>">
-          </div>
-          <div class="field">
-            <label>Tax %</label>
-            <input type="number" step="0.01" name="line_tax_<%= index %>" value="<%= line_item["tax"] %>">
-          </div>
+        <div class="field">
+          <label for="surface_tone">Surface tone</label>
+          <select id="surface_tone" name="surface_tone" data-preview-style="surface_tone">
+            <% [["paper", "Paper"], ["mist", "Mist"], ["sand", "Sand"], ["mint", "Mint"], ["night", "Night"]].each do |value, label| %>
+              <option value="<%= value %>" <%= @invoice_config["surface_tone"] == value ? "selected" : "" %>><%= label %></option>
+            <% end %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="font_family">Typeface</label>
+          <select id="font_family" name="font_family" data-preview-style="font_family">
+            <% [
+              ['"IBM Plex Sans", "Aptos", "Segoe UI", sans-serif', "Plex Sans"],
+              ['Georgia, "Times New Roman", serif', "Editorial Serif"],
+              ['"Trebuchet MS", "Segoe UI", sans-serif', "Humanist"],
+              ['"Avenir Next", "Helvetica Neue", sans-serif', "Neo Grotesk"],
+              ['"Courier New", "SFMono-Regular", monospace', "Mono"]
+            ].each do |value, label| %>
+              <option value="<%= h(value) %>" <%= @invoice_config["font_family"] == value ? "selected" : "" %>><%= label %></option>
+            <% end %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="density">Density</label>
+          <select id="density" name="density" data-preview-style="density">
+            <% [["compact", "Compact"], ["comfortable", "Comfortable"], ["spacious", "Spacious"]].each do |value, label| %>
+              <option value="<%= value %>" <%= @invoice_config["density"] == value ? "selected" : "" %>><%= label %></option>
+            <% end %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="header_align">Header layout</label>
+          <select id="header_align" name="header_align" data-preview-style="header_align">
+            <% [["split", "Split"], ["stacked", "Stacked"], ["left", "Left aligned"]].each do |value, label| %>
+              <option value="<%= value %>" <%= @invoice_config["header_align"] == value ? "selected" : "" %>><%= label %></option>
+            <% end %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="logo_text">Logo mark</label>
+          <input id="logo_text" name="logo_text" type="text" maxlength="3" value="<%= h(@invoice_config["logo_text"]) %>" data-preview-text="logo_text">
         </div>
       </div>
-    <% end %>
+    </section>
+
+    <section class="preview-card stack">
+      <div>
+        <p class="eyebrow">Content</p>
+        <h3>Document fields</h3>
+      </div>
+
+      <% {
+        "company_name" => "Company name",
+        "tagline" => "Tagline",
+        "address" => "Address",
+        "phone" => "Phone",
+        "email" => "Email",
+        "website" => "Website",
+        "gst" => "GST or VAT number",
+        "bill_to" => "Bill to",
+        "client_address" => "Client address",
+        "client_email" => "Client email",
+        "invoice_number" => "Invoice number",
+        "invoice_date" => "Invoice date",
+        "due_date" => "Due date",
+        "payment_terms" => "Payment terms",
+        "notes" => "Notes",
+        "bank_details" => "Bank details",
+        "terms" => "Terms and conditions"
+      }.each do |key, label| %>
+        <div class="field">
+          <label for="<%= key %>"><%= label %></label>
+          <% if %w[address notes bank_details terms client_address].include?(key) %>
+            <textarea id="<%= key %>" name="<%= key %>" data-preview-text="<%= key %>"><%= h(@invoice_config[key]) %></textarea>
+          <% else %>
+            <input id="<%= key %>" name="<%= key %>" type="text" value="<%= h(@invoice_config[key]) %>" data-preview-text="<%= key %>">
+          <% end %>
+        </div>
+      <% end %>
+
+      <div class="field">
+        <label for="currency_symbol">Currency symbol</label>
+        <select id="currency_symbol" name="currency_symbol" data-preview-metric="currency_symbol">
+          <% ["$", "EUR ", "GBP ", "INR "].each do |currency_symbol| %>
+            <option value="<%= currency_symbol %>" <%= @invoice_config["currency_symbol"] == currency_symbol ? "selected" : "" %>><%= currency_symbol %></option>
+          <% end %>
+        </select>
+      </div>
+    </section>
+
+    <section class="preview-card stack">
+      <div>
+        <p class="eyebrow">Visibility</p>
+        <h3>Show or hide sections</h3>
+      </div>
+      <% {
+        "website" => "Show website",
+        "gst" => "Show GST or VAT number",
+        "notes" => "Show notes",
+        "bank_details" => "Show bank details",
+        "terms" => "Show terms and conditions"
+      }.each do |field, label| %>
+        <div class="checkbox-row">
+          <input
+            id="visible_<%= field %>"
+            name="visible_<%= field %>"
+            type="checkbox"
+            value="1"
+            data-preview-toggle="<%= field %>"
+            <%= @invoice_config.dig("visible_fields", field) ? "checked" : "" %>
+          >
+          <label for="visible_<%= field %>"><%= label %></label>
+        </div>
+      <% end %>
+    </section>
+
+    <section class="preview-card stack">
+      <div>
+        <p class="eyebrow">Charges</p>
+        <h3>Line items</h3>
+      </div>
+      <% line_items.each_with_index do |line_item, index| %>
+        <div class="invoice-line-editor">
+          <div class="field">
+            <label for="line_desc_<%= index %>">Description</label>
+            <input
+              id="line_desc_<%= index %>"
+              type="text"
+              name="line_desc_<%= index %>"
+              value="<%= h(line_item["desc"]) %>"
+              data-line-item-index="<%= index %>"
+              data-line-item-field="desc"
+            >
+          </div>
+          <div class="grid-four" style="margin-top:10px">
+            <div class="field">
+              <label for="line_qty_<%= index %>">Qty</label>
+              <input id="line_qty_<%= index %>" type="number" step="1" name="line_qty_<%= index %>" value="<%= line_item["qty"] %>" data-line-item-index="<%= index %>" data-line-item-field="qty">
+            </div>
+            <div class="field">
+              <label for="line_rate_<%= index %>">Rate</label>
+              <input id="line_rate_<%= index %>" type="number" step="0.01" name="line_rate_<%= index %>" value="<%= line_item["rate"] %>" data-line-item-index="<%= index %>" data-line-item-field="rate">
+            </div>
+            <div class="field">
+              <label for="line_discount_<%= index %>">Discount %</label>
+              <input id="line_discount_<%= index %>" type="number" step="0.01" name="line_discount_<%= index %>" value="<%= line_item["discount"] %>" data-line-item-index="<%= index %>" data-line-item-field="discount">
+            </div>
+            <div class="field">
+              <label for="line_tax_<%= index %>">Tax %</label>
+              <input id="line_tax_<%= index %>" type="number" step="0.01" name="line_tax_<%= index %>" value="<%= line_item["tax"] %>" data-line-item-index="<%= index %>" data-line-item-field="tax">
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </section>
 
     <div class="button-inline">
       <button class="button" type="submit">Save</button>
@@ -97,26 +248,23 @@
     </div>
   </section>
 
-  <section class="template-preview" id="invoice-preview" data-template="<%= h(@invoice_config["template"]) %>">
-    <% symbol = @invoice_config["currency_symbol"] %>
-    <% line_subtotal = @invoice_config["line_items"].sum do |line_item|
-         quantity = line_item["qty"].to_f
-         rate = line_item["rate"].to_f
-         base = quantity * rate
-         base - (base * line_item["discount"].to_f / 100.0)
-       end %>
-    <% line_tax = @invoice_config["line_items"].sum do |line_item|
-         quantity = line_item["qty"].to_f
-         rate = line_item["rate"].to_f
-         base = quantity * rate
-         discounted = base - (base * line_item["discount"].to_f / 100.0)
-         discounted * line_item["tax"].to_f / 100.0
-       end %>
+  <section
+    class="template-preview"
+    id="invoice-preview"
+    data-template="<%= h(@invoice_config["template"]) %>"
+    data-density="<%= h(@invoice_config["density"]) %>"
+    data-header-align="<%= h(@invoice_config["header_align"]) %>"
+    data-surface-tone="<%= h(@invoice_config["surface_tone"]) %>"
+    style="--invoice-accent:<%= h(@invoice_config["accent_color"]) %>;--invoice-font:<%= h(@invoice_config["font_family"]) %>;"
+  >
     <header class="preview-header">
-      <div>
-        <span class="preview-style-badge" data-role="template-style-label"><%= h(@invoice_config["template"].capitalize) %></span>
-        <h2 data-preview-key="company_name"><%= h(@invoice_config["company_name"]) %></h2>
-        <p class="muted" data-preview-key="tagline"><%= h(@invoice_config["tagline"]) %></p>
+      <div class="preview-brand">
+        <div class="preview-logo-mark" data-preview-key="logo_text"><%= h(@invoice_config["logo_text"]) %></div>
+        <div>
+          <span class="preview-style-badge" data-role="template-style-label"><%= h(template_options.to_h[@invoice_config["template"]] || @invoice_config["template"].capitalize) %></span>
+          <h2 data-preview-key="company_name"><%= h(@invoice_config["company_name"]) %></h2>
+          <p class="muted" data-preview-key="tagline"><%= h(@invoice_config["tagline"]) %></p>
+        </div>
       </div>
       <div class="preview-meta">
         <span><strong data-preview-key="invoice_number"><%= h(@invoice_config["invoice_number"]) %></strong></span>
@@ -131,7 +279,7 @@
         <p data-preview-key="address"><%= h(@invoice_config["address"]) %></p>
         <p data-preview-key="phone"><%= h(@invoice_config["phone"]) %></p>
         <p data-preview-key="email"><%= h(@invoice_config["email"]) %></p>
-        <p data-preview-key="gst"><%= h(@invoice_config["gst"]) %></p>
+        <p data-preview-key="gst" data-visibility-key="gst" <%= @invoice_config.dig("visible_fields", "gst") ? "" : "hidden" %>><%= h(@invoice_config["gst"]) %></p>
         <p data-preview-key="website" data-visibility-key="website" <%= @invoice_config.dig("visible_fields", "website") ? "" : "hidden" %>><%= h(@invoice_config["website"]) %></p>
       </div>
       <div>
@@ -152,8 +300,9 @@
           <th class="align-right">Amount</th>
         </tr>
       </thead>
-      <tbody>
-        <% @invoice_config["line_items"].each do |line_item| %>
+      <tbody data-role="preview-line-items-body">
+        <% line_items.each do |line_item| %>
+          <% next if line_item["desc"].strip.empty? && line_item["qty"].to_f.zero? && line_item["rate"].to_f.zero? %>
           <% amount = line_item["qty"].to_f * line_item["rate"].to_f %>
           <% amount -= amount * line_item["discount"].to_f / 100.0 %>
           <tr>
@@ -168,14 +317,14 @@
 
     <footer class="preview-footer">
       <div>
-        <p class="muted" data-preview-key="notes"><%= h(@invoice_config["notes"]) %></p>
-        <p class="muted" data-preview-key="bank_details" style="margin-top:8px"><%= h(@invoice_config["bank_details"]) %></p>
+        <p class="muted" data-preview-key="notes" data-visibility-key="notes" <%= @invoice_config.dig("visible_fields", "notes") ? "" : "hidden" %>><%= h(@invoice_config["notes"]) %></p>
+        <p class="muted" data-preview-key="bank_details" data-visibility-key="bank_details" style="margin-top:8px" <%= @invoice_config.dig("visible_fields", "bank_details") ? "" : "hidden" %>><%= h(@invoice_config["bank_details"]) %></p>
         <p class="muted" data-preview-key="terms" data-visibility-key="terms" style="margin-top:8px" <%= @invoice_config.dig("visible_fields", "terms") ? "" : "hidden" %>><%= h(@invoice_config["terms"]) %></p>
       </div>
       <div class="totals-stack">
-        <span>Subtotal <strong><%= symbol %><%= format("%.2f", line_subtotal) %></strong></span>
-        <span>Tax <strong><%= symbol %><%= format("%.2f", line_tax) %></strong></span>
-        <span>Total <strong><%= symbol %><%= format("%.2f", line_subtotal + line_tax) %></strong></span>
+        <span>Subtotal <strong data-role="preview-subtotal"><%= symbol %><%= format("%.2f", line_subtotal) %></strong></span>
+        <span>Tax <strong data-role="preview-tax"><%= symbol %><%= format("%.2f", line_tax) %></strong></span>
+        <span>Total <strong data-role="preview-total"><%= symbol %><%= format("%.2f", line_subtotal + line_tax) %></strong></span>
       </div>
     </footer>
   </section>

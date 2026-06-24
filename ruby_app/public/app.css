@@ -942,12 +942,70 @@ textarea {
   overflow: auto;
 }
 
+.invoice-editor-shell {
+  gap: 16px;
+}
+
+.template-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.template-preset {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.template-preset:hover,
+.template-preset.is-active {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.template-preset-name {
+  font-weight: 760;
+}
+
+.template-preset-meta {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.style-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.invoice-line-editor {
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.invoice-line-editor:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .template-preview {
+  --invoice-accent: var(--accent);
+  --invoice-font: "IBM Plex Sans", "Aptos", "Segoe UI", sans-serif;
   position: sticky;
   top: 94px;
   padding: 28px;
   color: #24282d;
   background: #ffffff;
+  font-family: var(--invoice-font);
   transition: background 180ms ease, color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -990,6 +1048,26 @@ textarea {
   margin-top: 22px;
 }
 
+.preview-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.preview-logo-mark {
+  display: inline-grid;
+  place-items: center;
+  min-width: 42px;
+  height: 42px;
+  padding: 0 10px;
+  border-radius: 12px;
+  color: #fff;
+  background: var(--invoice-accent);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
 .preview-style-badge {
   display: inline-flex;
   align-items: center;
@@ -997,12 +1075,93 @@ textarea {
   margin-bottom: 10px;
   padding: 0 10px;
   border-radius: 999px;
-  color: var(--accent);
-  background: var(--accent-weak);
+  color: var(--invoice-accent);
+  background: color-mix(in srgb, var(--invoice-accent) 10%, white);
   font-size: 11px;
   font-weight: 760;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.template-preview [data-preview-key="address"],
+.template-preview [data-preview-key="client_address"],
+.template-preview [data-preview-key="notes"],
+.template-preview [data-preview-key="bank_details"],
+.template-preview [data-preview-key="terms"] {
+  white-space: pre-line;
+}
+
+.template-preview[data-surface-tone="paper"] {
+  background: #fffdf8;
+}
+
+.template-preview[data-surface-tone="mist"] {
+  background: #f7fbff;
+}
+
+.template-preview[data-surface-tone="sand"] {
+  background: #fff7eb;
+}
+
+.template-preview[data-surface-tone="mint"] {
+  background: #f3fcf8;
+}
+
+.template-preview[data-surface-tone="night"] {
+  color: #f8fafc;
+  background: #0f1720;
+  border-color: #0f1720;
+}
+
+.template-preview[data-surface-tone="night"] .muted,
+.template-preview[data-surface-tone="night"] .eyebrow,
+.template-preview[data-surface-tone="night"] .preview-line-items th,
+.template-preview[data-surface-tone="night"] .preview-line-items td,
+.template-preview[data-surface-tone="night"] .preview-meta,
+.template-preview[data-surface-tone="night"] .totals-stack {
+  color: #d7dee7;
+}
+
+.template-preview[data-surface-tone="night"] .preview-line-items th,
+.template-preview[data-surface-tone="night"] .preview-line-items td {
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+}
+
+.template-preview[data-header-align="stacked"] .preview-header {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.template-preview[data-header-align="left"] .preview-header {
+  display: grid;
+  justify-content: flex-start;
+}
+
+.template-preview[data-density="compact"] {
+  padding: 20px;
+}
+
+.template-preview[data-density="compact"] .preview-grid {
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.template-preview[data-density="compact"] .preview-line-items th,
+.template-preview[data-density="compact"] .preview-line-items td {
+  padding: 6px 0;
+}
+
+.template-preview[data-density="spacious"] {
+  padding: 38px;
+}
+
+.template-preview[data-density="spacious"] .preview-grid {
+  margin: 28px 0;
+}
+
+.template-preview[data-density="spacious"] .preview-line-items th,
+.template-preview[data-density="spacious"] .preview-line-items td {
+  padding: 12px 0;
 }
 
 .template-preview[data-template="modern"] {
@@ -1012,16 +1171,16 @@ textarea {
 }
 
 .template-preview[data-template="modern"] .preview-header {
-  border-bottom-color: #2d6cdf;
+  border-bottom-color: var(--invoice-accent);
 }
 
 .template-preview[data-template="modern"] .preview-style-badge {
-  color: #2d6cdf;
-  background: var(--blue-weak);
+  color: var(--invoice-accent);
+  background: color-mix(in srgb, var(--invoice-accent) 12%, white);
 }
 
 .template-preview[data-template="modern"] .preview-line-items th {
-  color: #2d6cdf;
+  color: var(--invoice-accent);
 }
 
 .template-preview[data-template="minimal"] {
@@ -1067,12 +1226,12 @@ textarea {
 }
 
 .template-preview[data-template="bold"] .preview-header {
-  border-bottom-color: #31c48d;
+  border-bottom-color: var(--invoice-accent);
 }
 
 .template-preview[data-template="bold"] .preview-style-badge {
   color: #0f1720;
-  background: #31c48d;
+  background: var(--invoice-accent);
 }
 
 .template-preview[data-template="bold"] .preview-line-items th,
@@ -1087,12 +1246,12 @@ textarea {
 }
 
 .template-preview[data-template="clean"] .preview-header {
-  border-bottom-color: #147c64;
+  border-bottom-color: var(--invoice-accent);
 }
 
 .template-preview[data-template="clean"] .preview-style-badge {
-  color: #147c64;
-  background: #eef7f2;
+  color: var(--invoice-accent);
+  background: color-mix(in srgb, var(--invoice-accent) 10%, white);
 }
 
 .template-preview[data-template="clean"] .preview-grid {
@@ -1132,9 +1291,84 @@ textarea {
   font-size: 10px;
 }
 
+.template-preview[data-template="editorial"] {
+  color: #35281c;
+  background: linear-gradient(180deg, #fffaf2 0%, #fff 24%);
+  border-color: #e6d7c6;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.template-preview[data-template="editorial"] .preview-header {
+  border-bottom: 1px solid #b08a62;
+}
+
+.template-preview[data-template="editorial"] .preview-style-badge {
+  color: #8c5d2f;
+  background: #f6ead9;
+}
+
+.template-preview[data-template="ledger"] {
+  color: #22313f;
+  background:
+    linear-gradient(transparent 31px, rgba(49, 88, 126, 0.09) 32px),
+    linear-gradient(90deg, transparent 63px, rgba(49, 88, 126, 0.08) 64px),
+    #ffffff;
+  background-size: 100% 32px, 64px 100%, auto;
+  border-color: #c7d5e5;
+}
+
+.template-preview[data-template="ledger"] .preview-header {
+  border-bottom-color: #4b6b8c;
+}
+
+.template-preview[data-template="ledger"] .preview-style-badge {
+  color: #4b6b8c;
+  background: #edf3fa;
+}
+
+.template-preview[data-template="luxe"] {
+  color: #2f2618;
+  background: linear-gradient(180deg, #fffdf8 0%, #f8f1e4 100%);
+  border-color: #e8dac0;
+  box-shadow: 0 8px 24px rgba(78, 62, 28, 0.08);
+}
+
+.template-preview[data-template="luxe"] .preview-header {
+  border-bottom-color: #9b7b2f;
+}
+
+.template-preview[data-template="luxe"] .preview-style-badge {
+  color: #7e5f1a;
+  background: #f7ebc8;
+}
+
+.template-preview[data-template="luxe"] .preview-logo-mark {
+  border-radius: 999px;
+}
+
+.template-preview[data-template="mono"] {
+  color: #1f2933;
+  background: #fcfcfc;
+  border-color: #d5d9de;
+  font-family: "Courier New", "SFMono-Regular", monospace;
+}
+
+.template-preview[data-template="mono"] .preview-header {
+  border-bottom: 3px double #7d8790;
+}
+
+.template-preview[data-template="mono"] .preview-style-badge {
+  color: #4a5560;
+  background: #eef0f2;
+}
+
+.template-preview[data-template="mono"] .preview-logo-mark {
+  border-radius: 6px;
+}
+
 .template-preview[data-template="classic"] .preview-style-badge {
-  color: var(--accent);
-  background: var(--accent-weak);
+  color: var(--invoice-accent);
+  background: color-mix(in srgb, var(--invoice-accent) 10%, white);
 }
 
 .stepper {
