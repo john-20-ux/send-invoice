@@ -62,6 +62,7 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     failed_request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.fail_async_job_request(failed_request_id, "permanent failure")
@@ -102,7 +103,7 @@ class SendInvoiceAppTest < Minitest::Test
       "error_message" => "Shopify timeout"
     })
 
-    response = perform(app, "GET", "/queue-ops", { "shop" => shop["shop_domain"], "status" => "all" })
+    response = perform(app, "GET", "/queue-ops", { "shop" => shop["shop_domain"], "status" => "all" }, cookies)
 
     assert_equal 200, response.status
     assert_includes response.body, "Queue Ops"
@@ -574,12 +575,13 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     failed_request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.fail_async_job_request(failed_request_id, "permanent failure")
     sync_engine.trigger(shop: shop, type: "incremental")
 
-    response = perform(app, "GET", "/api/async-requests", { "shop" => shop["shop_domain"] })
+    response = perform(app, "GET", "/api/async-requests", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 200, response.status
     payload = JSON.parse(response.body)
@@ -598,11 +600,12 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.fail_async_job_request(request_id, "temporary failure")
 
-    response = perform(app, "POST", "/api/async-requests/#{request_id}/retry", { "shop" => shop["shop_domain"] })
+    response = perform(app, "POST", "/api/async-requests/#{request_id}/retry", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 200, response.status
     payload = JSON.parse(response.body)
@@ -618,13 +621,14 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     first_request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.fail_async_job_request(first_request_id, "older failure")
     second_request_id = sync_engine.trigger(shop: shop, type: "incremental").fetch("requestId")
     store.fail_async_job_request(second_request_id, "newer failure")
 
-    response = perform(app, "POST", "/api/async-requests/retry-latest-failed", { "shop" => shop["shop_domain"] })
+    response = perform(app, "POST", "/api/async-requests/retry-latest-failed", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 200, response.status
     payload = JSON.parse(response.body)
@@ -641,13 +645,14 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     first_request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.fail_async_job_request(first_request_id, "temporary failure")
     second_request_id = sync_engine.trigger(shop: shop, type: "incremental").fetch("requestId")
     store.fail_async_job_request(second_request_id, "permanent failure")
 
-    response = perform(app, "POST", "/api/async-requests/retry-all-failed", { "shop" => shop["shop_domain"] })
+    response = perform(app, "POST", "/api/async-requests/retry-all-failed", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 200, response.status
     payload = JSON.parse(response.body)
@@ -664,11 +669,12 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.complete_async_job_request(request_id)
 
-    response = perform(app, "DELETE", "/api/async-requests/#{request_id}", { "shop" => shop["shop_domain"] })
+    response = perform(app, "DELETE", "/api/async-requests/#{request_id}", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 200, response.status
     payload = JSON.parse(response.body)
@@ -684,10 +690,11 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
 
-    response = perform(app, "POST", "/api/async-requests/#{request_id}/retry", { "shop" => shop["shop_domain"] })
+    response = perform(app, "POST", "/api/async-requests/#{request_id}/retry", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 409, response.status
     assert_equal "Only failed async job requests can be retried", JSON.parse(response.body)["error"]
@@ -700,8 +707,9 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
-    response = perform(app, "POST", "/api/async-requests/retry-latest-failed", { "shop" => shop["shop_domain"] })
+    response = perform(app, "POST", "/api/async-requests/retry-latest-failed", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 404, response.status
     assert_equal "No failed async job requests found", JSON.parse(response.body)["error"]
@@ -714,8 +722,9 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
-    response = perform(app, "POST", "/api/async-requests/retry-all-failed", { "shop" => shop["shop_domain"] })
+    response = perform(app, "POST", "/api/async-requests/retry-all-failed", { "shop" => shop["shop_domain"] }, cookies)
 
     assert_equal 404, response.status
     assert_equal "No failed async job requests found", JSON.parse(response.body)["error"]
@@ -728,6 +737,7 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     first_request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     second_request_id = sync_engine.trigger(shop: shop, type: "incremental").fetch("requestId")
@@ -739,7 +749,7 @@ class SendInvoiceAppTest < Minitest::Test
       "POST",
       "/queue-ops/retry-all-failed",
       { "shop" => shop["shop_domain"] },
-      [],
+      cookies,
       "",
       { "referer" => "http://example.test/queue-ops?shop=#{shop['shop_domain']}&status=all" }
     )
@@ -757,6 +767,7 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
 
     request_id = sync_engine.trigger(shop: shop, type: "full").fetch("requestId")
     store.complete_async_job_request(request_id)
@@ -766,7 +777,7 @@ class SendInvoiceAppTest < Minitest::Test
       "POST",
       "/queue-ops/requests/#{request_id}/delete",
       { "shop" => shop["shop_domain"] },
-      [],
+      cookies,
       "",
       { "referer" => "http://example.test/queue-ops?shop=#{shop['shop_domain']}&status=all" }
     )
@@ -783,6 +794,7 @@ class SendInvoiceAppTest < Minitest::Test
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
     shop = store.shop("sync-test.myshopify.com")
+    cookies = admin_session_cookies(store, config, shop["shop_domain"])
     batch = store.create_batch_log(shop["shop_domain"], {
       "batch_type" => "remaining_6_months",
       "start_date" => "2026-05-01",
@@ -800,7 +812,7 @@ class SendInvoiceAppTest < Minitest::Test
       "POST",
       "/queue-ops/batches/#{batch['id']}/retry",
       { "shop" => shop["shop_domain"] },
-      [],
+      cookies,
       "",
       { "referer" => "http://example.test/queue-ops?shop=#{shop['shop_domain']}&status=all" }
     )
@@ -814,6 +826,30 @@ class SendInvoiceAppTest < Minitest::Test
     assert_nil retried_batch["error_message"]
     assert_equal "queued", queued_request["status"]
     assert_equal "sync.first_time", queued_request["request_type"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_dashboard_hides_admin_queue_nav_without_admin_session
+    app, = build_app(onboarded: true, order_count: 12)
+
+    response = perform(app, "GET", "/dashboard", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+
+    assert_equal 200, response.status
+    refute_includes response.body, ">Queue Ops<"
+    refute_includes response.body, ">Admin<"
+  end
+
+  def test_async_requests_api_rejects_non_admin_session
+    store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+    shop = store.shop("sync-test.myshopify.com")
+
+    response = perform(app, "GET", "/api/async-requests", { "shop" => shop["shop_domain"] })
+
+    assert_equal 401, response.status
+    assert_equal "Unauthorized: missing admin app session", JSON.parse(response.body)["error"]
   ensure
     FileUtils.rm_f(database_path) if database_path
     clear_shopify_env
@@ -1618,6 +1654,15 @@ class SendInvoiceAppTest < Minitest::Test
       "x-shopify-shop-domain" => shop_domain,
       "x-shopify-webhook-id" => "webhook-test-id"
     }
+  end
+
+  def admin_session_cookies(store, config, shop_domain)
+    session_id = SecureRandom.hex(24)
+    store.save_session(session_id, shop_domain, {
+      "shop_domain" => shop_domain,
+      "admin_shop_domain" => shop_domain
+    })
+    [WEBrick::Cookie.new(config.session_cookie_name, session_id)]
   end
 
   def clear_shopify_env

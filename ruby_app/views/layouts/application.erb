@@ -25,6 +25,16 @@
               </a>
             <% end %>
           </nav>
+          <% if @admin_nav_items && !@admin_nav_items.empty? %>
+            <p class="eyebrow">Admin</p>
+            <nav class="nav-stack">
+              <% @admin_nav_items.each do |item| %>
+                <a href="<%= item["path"] %>" class="nav-link <%= active_path?(@current_path, item["path"]) ? "is-active" : "" %>">
+                  <span><%= h(item["label"]) %></span>
+                </a>
+              <% end %>
+            </nav>
+          <% end %>
           <div class="sidebar-footnote">
             <p><strong><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></strong></p>
             <p><%= h(@shop["shop_domain"]) %></p>

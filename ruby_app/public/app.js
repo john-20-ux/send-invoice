@@ -206,6 +206,7 @@
   function bootSyncPolling() {
     var banner = $("#sync-banner");
     if (!banner || !banner.dataset.shopDomain) return;
+    var asyncRecoveryEnabled = banner.dataset.asyncEnabled === "true";
     var refreshingFailedRequests = false;
 
     updateSyncBanner({
@@ -226,6 +227,7 @@
     }
 
     async function refreshFailedAsyncRequests() {
+      if (!asyncRecoveryEnabled) return;
       if (refreshingFailedRequests) return;
       refreshingFailedRequests = true;
       try {
@@ -246,6 +248,7 @@
       var action = button.dataset.action;
       if (!action) return;
       if ((action === "retry" || action === "delete") && !requestId) return;
+      if (!asyncRecoveryEnabled) return;
 
       button.disabled = true;
       try {
@@ -273,11 +276,11 @@
       }
     });
 
-    refreshFailedAsyncRequests();
+    if (asyncRecoveryEnabled) refreshFailedAsyncRequests();
 
     window.setInterval(async function () {
       await refreshSyncBanner();
-      await refreshFailedAsyncRequests();
+      if (asyncRecoveryEnabled) await refreshFailedAsyncRequests();
     }, 5000);
   }
 

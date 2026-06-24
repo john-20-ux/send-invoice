@@ -20,12 +20,15 @@ module SendInvoice
     NAV_ITEMS = [
       { "label" => "Home", "path" => "/dashboard" },
       { "label" => "Orders", "path" => "/orders" },
-      { "label" => "Queue Ops", "path" => "/queue-ops" },
       { "label" => "Vendors", "path" => "/vendors" },
       { "label" => "Invoice Templates", "path" => "/invoice-templates" },
       { "label" => "Notifications", "path" => "/notifications" },
       { "label" => "Settings", "path" => "/settings" },
       { "label" => "Support", "path" => "/support" }
+    ].freeze
+
+    ADMIN_NAV_ITEMS = [
+      { "label" => "Queue Ops", "path" => "/queue-ops" }
     ].freeze
 
     ASYNC_REQUEST_STATUSES = %w[queued claimed dispatched running completed failed].freeze
@@ -219,6 +222,7 @@ module SendInvoice
       if @config.mock_mode?
         shop_domain = @shopify_client.valid_shop_domain?(requested_shop.to_s) ? requested_shop : MockData::DEMO_SHOP_DOMAIN
         @session["shop_domain"] = shop_domain
+        @session["admin_shop_domain"] = shop_domain
         @store.ensure_shop(shop_domain, "shop_name" => MockData::DEMO_SHOP_NAME)
         redirect_to("/onboarding?shop=#{URI.encode_www_form_component(shop_domain)}")
         return
@@ -260,6 +264,7 @@ module SendInvoice
       })
       register_shop_webhooks(shop, token_data.fetch("access_token"))
       @session["shop_domain"] = shop
+      @session["admin_shop_domain"] = shop
       @session.delete("state")
       redirect_to("/onboarding?shop=#{URI.encode_www_form_component(shop)}")
     end
@@ -305,6 +310,7 @@ module SendInvoice
       end
 
       @session["shop_domain"] = shop_domain
+      @session["admin_shop_domain"] = shop_domain
       @store.ensure_shop(shop_domain, "shop_name" => current_shop_name(shop_domain))
       redirect_to("/onboarding/step-3")
     end
@@ -381,7 +387,7 @@ module SendInvoice
     end
 
     def render_queue_ops
-      shop = require_onboarded_shop
+      shop = require_admin_shop_for_current_shop
       statuses = requested_async_request_statuses(default: ASYNC_REQUEST_STATUSES)
       limit = requested_async_request_limit(default: 25)
       page = requested_async_request_page
@@ -419,7 +425,7 @@ module SendInvoice
     end
 
     def handle_queue_ops_retry_latest_failed
-      shop = require_onboarded_shop
+      shop = require_admin_shop_for_current_shop
       retried = @store.retry_latest_failed_async_job_request(shop_domain: shop["shop_domain"])
 
       if retried
@@ -432,7 +438,7 @@ module SendInvoice
     end
 
     def handle_queue_ops_retry_all_failed
-      shop = require_onboarded_shop
+      shop = require_admin_shop_for_current_shop
       retried_count = @store.retry_all_failed_async_job_requests(shop_domain: shop["shop_domain"])
 
       if retried_count.positive?
@@ -445,7 +451,7 @@ module SendInvoice
     end
 
     def handle_queue_ops_retry_async_request
-      shop = require_onboarded_shop
+      shop = require_admin_shop_for_current_shop
       request = shop_async_job_request_from_path
 
       if request && @store.retry_failed_async_job_request(request["id"])
@@ -460,7 +466,7 @@ module SendInvoice
     end
 
     def handle_queue_ops_delete_async_request
-      shop = require_onboarded_shop
+      shop = require_admin_shop_for_current_shop
       request = shop_async_job_request_from_path
 
       if request && @store.delete_async_job_request(request["id"], allowed_statuses: %w[failed completed])
@@ -475,7 +481,7 @@ module SendInvoice
     end
 
     def handle_queue_ops_retry_batch_log
-      shop = require_onboarded_shop
+      shop = require_admin_shop_for_current_shop
       batch = shop_batch_log_from_path
 
       if batch.nil?
@@ -796,7 +802,7 @@ module SendInvoice
     end
 
     def api_async_requests
-      shop = require_shop
+      shop = require_admin_shop_for_current_shop
       statuses = requested_async_request_statuses
       requests = @store.async_job_requests(
         shop_domain: shop["shop_domain"],
@@ -811,7 +817,7 @@ module SendInvoice
     end
 
     def api_retry_async_request
-      require_shop
+      require_admin_shop_for_current_shop
       request = shop_async_job_request_from_path
       return respond_json({ error: "Async job request not found" }, status: 404) unless request
 
@@ -828,7 +834,7 @@ module SendInvoice
     end
 
     def api_retry_latest_failed_async_request
-      shop = require_shop
+      shop = require_admin_shop_for_current_shop
       retried = @store.retry_latest_failed_async_job_request(shop_domain: shop["shop_domain"])
       return respond_json({ error: "No failed async job requests found" }, status: 404) unless retried
 
@@ -839,7 +845,7 @@ module SendInvoice
     end
 
     def api_retry_all_failed_async_requests
-      shop = require_shop
+      shop = require_admin_shop_for_current_shop
       retried_count = @store.retry_all_failed_async_job_requests(shop_domain: shop["shop_domain"])
       return respond_json({ error: "No failed async job requests found" }, status: 404) if retried_count.zero?
 
@@ -850,7 +856,7 @@ module SendInvoice
     end
 
     def api_delete_async_request
-      require_shop
+      require_admin_shop_for_current_shop
       request = shop_async_job_request_from_path
       return respond_json({ error: "Async job request not found" }, status: 404) unless request
 
@@ -968,9 +974,19 @@ module SendInvoice
 
     def render_page(page, locals, status: 200, layout: "application")
       page_template = File.join(@config.views_path, "#{page}.erb")
-      content = ERB.new(File.read(page_template)).result(TemplateContext.new(self, base_locals.merge(locals)).binding_context)
+      render_locals = base_locals.merge(locals)
+      render_locals[:queue_ops_admin] = queue_ops_admin?(render_locals[:shop])
+      content = ERB.new(File.read(page_template)).result(TemplateContext.new(self, render_locals).binding_context)
       layout_template = File.join(@config.views_path, "layouts", "#{layout}.erb")
-      context = TemplateContext.new(self, base_locals.merge(locals).merge(content: content, nav_items: NAV_ITEMS, flash: consume_flash))
+      context = TemplateContext.new(
+        self,
+        render_locals.merge(
+          content: content,
+          nav_items: NAV_ITEMS,
+          admin_nav_items: queue_ops_admin?(render_locals[:shop]) ? ADMIN_NAV_ITEMS : [],
+          flash: consume_flash
+        )
+      )
       @response.status = status
       @response["Content-Type"] = "text/html; charset=utf-8"
       @response.body = ERB.new(File.read(layout_template)).result(context.binding_context)
@@ -1012,6 +1028,24 @@ module SendInvoice
       raise UnauthorizedError, "Unauthorized: shop not found. Please reinstall the app."
     end
 
+    def current_admin_shop(optional: false)
+      admin_shop_domain = @session["admin_shop_domain"].to_s
+      return nil if optional && admin_shop_domain.empty?
+      raise UnauthorizedError, "Unauthorized: missing admin app session" if admin_shop_domain.empty?
+      raise UnauthorizedError, "Unauthorized: invalid admin shop domain" unless @shopify_client.valid_shop_domain?(admin_shop_domain)
+
+      shop = @store.shop(admin_shop_domain)
+      if shop && shop["uninstalled_at"]
+        return nil if optional
+
+        raise UnauthorizedError, "Unauthorized: admin shop uninstalled. Please reinstall the app."
+      end
+      return shop if shop
+      return nil if optional
+
+      raise UnauthorizedError, "Unauthorized: admin shop not found. Please reinstall the app."
+    end
+
     def require_shop
       current_shop(optional: false)
     end
@@ -1029,6 +1063,14 @@ module SendInvoice
       raise UnauthorizedError, "Initial sync is not complete yet." unless status["status"] == "completed"
 
       shop
+    end
+
+    def require_admin_shop_for_current_shop
+      shop = require_onboarded_shop
+      admin_shop = current_admin_shop(optional: false)
+      return shop if admin_shop["shop_domain"] == shop["shop_domain"]
+
+      raise UnauthorizedError, "Queue Ops is only available to app admins for the installed shop."
     end
 
     def current_sync_status(optional: false)
@@ -1168,6 +1210,13 @@ module SendInvoice
 
     def base_locals
       { current_year: Time.now.year }
+    end
+
+    def queue_ops_admin?(shop)
+      return false unless shop
+
+      admin_shop = current_admin_shop(optional: true)
+      admin_shop && admin_shop["shop_domain"] == shop["shop_domain"]
     end
 
     def back_path(fallback)
