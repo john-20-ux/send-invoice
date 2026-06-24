@@ -222,7 +222,6 @@ module SendInvoice
       if @config.mock_mode?
         shop_domain = @shopify_client.valid_shop_domain?(requested_shop.to_s) ? requested_shop : MockData::DEMO_SHOP_DOMAIN
         @session["shop_domain"] = shop_domain
-        @session["admin_shop_domain"] = shop_domain
         @store.ensure_shop(shop_domain, "shop_name" => MockData::DEMO_SHOP_NAME)
         redirect_to("/onboarding?shop=#{URI.encode_www_form_component(shop_domain)}")
         return
@@ -235,6 +234,8 @@ module SendInvoice
       state = @shopify_client.generate_nonce
       @session["state"] = state
       @session["shop_domain"] = requested_shop
+      @session.delete("admin_shop_domain")
+      @session.delete("queue_ops_admin_granted")
       redirect_uri = "#{@config.host}/auth/callback"
       redirect_to(@shopify_client.build_auth_url(requested_shop, redirect_uri, state))
     end
@@ -265,6 +266,7 @@ module SendInvoice
       register_shop_webhooks(shop, token_data.fetch("access_token"))
       @session["shop_domain"] = shop
       @session["admin_shop_domain"] = shop
+      @session["queue_ops_admin_granted"] = true
       @session.delete("state")
       redirect_to("/onboarding?shop=#{URI.encode_www_form_component(shop)}")
     end
@@ -310,7 +312,8 @@ module SendInvoice
       end
 
       @session["shop_domain"] = shop_domain
-      @session["admin_shop_domain"] = shop_domain
+      @session.delete("admin_shop_domain")
+      @session.delete("queue_ops_admin_granted")
       @store.ensure_shop(shop_domain, "shop_name" => current_shop_name(shop_domain))
       redirect_to("/onboarding/step-3")
     end
@@ -1029,6 +1032,10 @@ module SendInvoice
     end
 
     def current_admin_shop(optional: false)
+      granted = @session["queue_ops_admin_granted"] == true
+      return nil if optional && !granted
+      raise UnauthorizedError, "Unauthorized: missing admin app session" unless granted
+
       admin_shop_domain = @session["admin_shop_domain"].to_s
       return nil if optional && admin_shop_domain.empty?
       raise UnauthorizedError, "Unauthorized: missing admin app session" if admin_shop_domain.empty?

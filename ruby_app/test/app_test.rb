@@ -855,6 +855,20 @@ class SendInvoiceAppTest < Minitest::Test
     clear_shopify_env
   end
 
+  def test_queue_ops_page_redirects_without_admin_session
+    store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+    shop = store.shop("sync-test.myshopify.com")
+
+    response = perform(app, "GET", "/queue-ops", { "shop" => shop["shop_domain"] })
+
+    assert_equal 302, response.status
+    assert_equal "/onboarding", response["Location"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
   def test_run_sync_command_executes_synchronously
     store, sync_engine, _shopify_client, database_path = build_real_sync_engine
     shop = store.shop("sync-test.myshopify.com")
@@ -1660,7 +1674,8 @@ class SendInvoiceAppTest < Minitest::Test
     session_id = SecureRandom.hex(24)
     store.save_session(session_id, shop_domain, {
       "shop_domain" => shop_domain,
-      "admin_shop_domain" => shop_domain
+      "admin_shop_domain" => shop_domain,
+      "queue_ops_admin_granted" => true
     })
     [WEBrick::Cookie.new(config.session_cookie_name, session_id)]
   end
