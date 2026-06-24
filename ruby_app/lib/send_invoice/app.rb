@@ -1165,7 +1165,9 @@ module SendInvoice
     end
 
     def merged_invoice_config(shop)
-      deep_merge(MockData::DEFAULT_INVOICE_TEMPLATE_CONFIG, shop["invoice_template_config"] || {})
+      normalize_invoice_config(
+        deep_merge(MockData::DEFAULT_INVOICE_TEMPLATE_CONFIG, shop["invoice_template_config"] || {})
+      )
     end
 
     def merged_notification_config(shop)
@@ -1182,6 +1184,42 @@ module SendInvoice
         end
       end
       merged
+    end
+
+    def normalize_invoice_config(config)
+      defaults = MockData::DEFAULT_INVOICE_TEMPLATE_CONFIG
+      normalized = deep_merge(defaults, config || {})
+
+      %w[
+        template currency_symbol accent_color surface_tone font_family density
+        header_align logo_text company_name tagline address phone email website gst
+        bill_to client_address client_email invoice_number invoice_date due_date
+        payment_terms notes bank_details terms
+      ].each do |key|
+        value = normalized[key].to_s
+        normalized[key] = value.strip.empty? ? defaults[key] : value
+      end
+
+      visible_defaults = defaults["visible_fields"] || {}
+      visible_fields = normalized["visible_fields"].is_a?(Hash) ? normalized["visible_fields"] : {}
+      normalized["visible_fields"] = visible_defaults.each_with_object({}) do |(field, default_value), memo|
+        memo[field] = visible_fields.key?(field) ? !!visible_fields[field] : default_value
+      end
+
+      normalized["line_items"] = Array(normalized["line_items"]).map do |line_item|
+        next unless line_item.is_a?(Hash)
+
+        {
+          "desc" => line_item["desc"].to_s,
+          "qty" => line_item["qty"].to_f,
+          "rate" => line_item["rate"].to_f,
+          "discount" => line_item["discount"].to_f,
+          "tax" => line_item["tax"].to_f
+        }
+      end.compact
+
+      normalized["line_items"] = defaults["line_items"] if normalized["line_items"].empty?
+      normalized
     end
 
     def plan_definitions

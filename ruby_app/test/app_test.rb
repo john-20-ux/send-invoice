@@ -103,6 +103,41 @@ class SendInvoiceAppTest < Minitest::Test
     assert_includes response.body, 'data-template-choice="editorial"'
   end
 
+  def test_invoice_templates_page_backfills_studio_defaults_for_legacy_saved_config
+    app, store = build_app(onboarded: true, order_count: 12)
+    store.update_shop(SendInvoice::MockData::DEMO_SHOP_DOMAIN, {
+      "invoice_template_config" => {
+        "template" => "ledger",
+        "accent_color" => "",
+        "surface_tone" => "",
+        "font_family" => "",
+        "density" => "",
+        "header_align" => "",
+        "logo_text" => "",
+        "visible_fields" => { "website" => true },
+        "line_items" => []
+      }
+    })
+
+    response = perform(app, "GET", "/invoice-templates", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, 'data-template="ledger"'
+    assert_includes response.body, 'value="#147c64"'
+    assert_includes response.body, 'data-density="comfortable"'
+    assert_includes response.body, 'data-header-align="split"'
+    assert_includes response.body, 'data-surface-tone="paper"'
+    assert_includes response.body, '--invoice-accent:#147c64;'
+    assert_includes response.body, '--invoice-font:&quot;IBM Plex Sans&quot;, &quot;Aptos&quot;, &quot;Segoe UI&quot;, sans-serif;'
+    assert_includes response.body, 'value="AS"'
+    assert_includes response.body, 'name="visible_gst"'
+    assert_includes response.body, 'checked'
+    assert_includes response.body, 'name="line_desc_0"'
+    assert_includes response.body, 'Support and handling'
+  end
+
   def test_queue_ops_page_renders_history_and_diagnostics
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
