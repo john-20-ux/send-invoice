@@ -574,7 +574,7 @@ module SendInvoice
 
     def order(shop_domain, order_id)
       @database.with_connection do |db|
-        row = db.get_first_row("SELECT * FROM orders WHERE shop_domain = ? AND id = ?", shop_domain, order_id)
+        row = db.get_first_row("SELECT * FROM orders WHERE shop_domain = ? AND id = ?", [shop_domain, order_id])
         hydrate_order(row)
       end
     end

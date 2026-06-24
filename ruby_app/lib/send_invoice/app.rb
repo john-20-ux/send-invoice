@@ -363,8 +363,8 @@ module SendInvoice
         search: single_value(params["search"])
       }
       result = @store.orders(shop["shop_domain"], filters)
-      selected_order = single_value(params["order_id"])
-      order = selected_order ? @store.order(shop["shop_domain"], selected_order) : nil
+      selected_order_id = single_value(params["order_id"])
+      order = selected_order_id ? @store.order(shop["shop_domain"], selected_order_id) : nil
 
       render_page("pages/orders", {
         page_title: "Orders",
@@ -374,6 +374,8 @@ module SendInvoice
         filters: filters,
         order_result: result,
         selected_order: order,
+        selected_order_id: selected_order_id,
+        selected_order_missing: !selected_order_id.to_s.empty? && order.nil?,
         pagination_path: "/orders"
       })
     end

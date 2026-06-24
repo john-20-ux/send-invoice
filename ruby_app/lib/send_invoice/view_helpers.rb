@@ -30,6 +30,17 @@ module SendInvoice
       Time.parse(value.to_s).strftime("%b %-d, %Y at %-I:%M %p")
     end
 
+    def format_weight(value)
+      amount = value.to_f
+      return "-" unless amount.positive?
+
+      if amount >= 1000
+        "#{format('%.2f', amount / 1000.0)} kg"
+      else
+        "#{amount.round} g"
+      end
+    end
+
     def time_ago(value)
       return "never" unless value
 
@@ -95,6 +106,27 @@ module SendInvoice
       end
       query = URI.encode_www_form(filtered)
       query.empty? ? path : "#{path}?#{query}"
+    end
+
+    def address_lines(address)
+      return [] unless address.is_a?(Hash)
+
+      name = [address["name"], address["firstName"], address["lastName"]].compact.join(" ").strip
+      city_line = [
+        address["city"],
+        address["province"] || address["provinceCode"],
+        address["zip"] || address["postalCode"]
+      ].compact.reject(&:empty?).join(", ")
+
+      [
+        name,
+        address["company"],
+        address["address1"],
+        address["address2"],
+        city_line,
+        address["country"] || address["countryCodeV2"],
+        address["phone"]
+      ].compact.reject(&:empty?)
     end
   end
 end

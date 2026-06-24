@@ -40,6 +40,16 @@ module SendInvoice
       { "title" => "Face Serum Trio", "sku" => "FST-501", "variant" => "Sensitive", "vendor" => "GreenLeaf Organics", "price" => 58.0 }
     ].freeze
 
+    CITIES = [
+      ["San Francisco", "CA"],
+      ["Austin", "TX"],
+      ["Seattle", "WA"],
+      ["Chicago", "IL"],
+      ["Miami", "FL"],
+      ["Denver", "CO"],
+      ["Brooklyn", "NY"]
+    ].freeze
+
     FINANCIAL_STATUSES = %w[PAID PAID PAID PARTIALLY_PAID PENDING REFUNDED PARTIALLY_REFUNDED].freeze
     FULFILLMENT_STATUSES = ["FULFILLED", "FULFILLED", "FULFILLED", "UNFULFILLED", "PARTIALLY_FULFILLED", "IN_PROGRESS", nil].freeze
 
@@ -144,6 +154,33 @@ module SendInvoice
 
         transactions = [{ "amount" => total_price, "currency" => DEFAULT_CURRENCY }]
         transactions << { "amount" => -refunded, "currency" => DEFAULT_CURRENCY } if refunded.positive?
+        city, province = CITIES[(seeded_random(seed + 43) * CITIES.length).floor]
+        address1 = "#{120 + index} Market Street"
+        address2 = seeded_random(seed + 44) > 0.65 ? "Suite #{100 + index}" : nil
+        zip = format("%05d", 10000 + ((seeded_random(seed + 45) * 89999).floor))
+        shipping_name = "#{first_name} #{last_name}"
+        order_tags = []
+        order_tags << "vip" if total_price >= 250
+        order_tags << "gift" if seeded_random(seed + 46) > 0.78
+        note = seeded_random(seed + 47) > 0.7 ? "Leave package at the front desk if nobody answers." : nil
+        transaction_rows = [
+          {
+            "kind" => "SALE",
+            "status" => financial_status == "PENDING" ? "PENDING" : "SUCCESS",
+            "gateway" => "Shopify Payments",
+            "processedAt" => created_at.utc.iso8601,
+            "amountSet" => money_set(total_price)
+          }
+        ]
+        if refunded.positive?
+          transaction_rows << {
+            "kind" => "REFUND",
+            "status" => "SUCCESS",
+            "gateway" => "Shopify Payments",
+            "processedAt" => (created_at + 3600).utc.iso8601,
+            "amountSet" => money_set(refunded)
+          }
+        end
 
         normalized_last_name = last_name.downcase.gsub(/[^a-z]/, "")
         {
@@ -169,7 +206,44 @@ module SendInvoice
           "customer_phone" => seeded_random(seed + 41) > 0.5 ? "+1#{(seeded_random(seed + 42) * 9_000_000_000 + 1_000_000_000).floor}" : nil,
           "line_items" => line_items,
           "transactions" => transactions,
-          "raw_data" => {},
+          "raw_data" => {
+            "id" => "gid://shopify/Order/#{4000 + index}",
+            "name" => "##{1001 + index}",
+            "createdAt" => created_at.utc.iso8601,
+            "updatedAt" => (created_at + 1800).utc.iso8601,
+            "fullyPaid" => financial_status == "PAID",
+            "displayFinancialStatus" => financial_status,
+            "displayFulfillmentStatus" => fulfillment_status,
+            "customer" => {
+              "id" => "gid://shopify/Customer/#{2000 + (seeded_random(seed + 40) * 50).floor}",
+              "firstName" => first_name,
+              "lastName" => last_name,
+              "email" => "#{first_name.downcase}.#{normalized_last_name}@example.com",
+              "phone" => seeded_random(seed + 41) > 0.5 ? "+1#{(seeded_random(seed + 42) * 9_000_000_000 + 1_000_000_000).floor}" : nil
+            },
+            "shippingAddress" => {
+              "name" => shipping_name,
+              "address1" => address1,
+              "address2" => address2,
+              "city" => city,
+              "province" => province,
+              "zip" => zip,
+              "country" => "United States",
+              "phone" => seeded_random(seed + 41) > 0.5 ? "+1#{(seeded_random(seed + 42) * 9_000_000_000 + 1_000_000_000).floor}" : nil
+            },
+            "billingAddress" => {
+              "name" => shipping_name,
+              "address1" => address1,
+              "address2" => address2,
+              "city" => city,
+              "province" => province,
+              "zip" => zip,
+              "country" => "United States"
+            },
+            "note" => note,
+            "tags" => order_tags,
+            "transactions" => transaction_rows
+          },
           "synced_at" => Time.now.utc.iso8601
         }
       end.sort_by { |order| order["created_at"] }.reverse
@@ -177,6 +251,15 @@ module SendInvoice
 
     def round_money(value)
       (value * 100).round / 100.0
+    end
+
+    def money_set(amount)
+      {
+        "shopMoney" => {
+          "amount" => format("%.2f", amount),
+          "currencyCode" => DEFAULT_CURRENCY
+        }
+      }
     end
   end
 end
