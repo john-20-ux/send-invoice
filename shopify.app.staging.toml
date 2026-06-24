@@ -1,0 +1,21 @@
+# Shopify staging app configuration for the Ruby app.
+# Replace the placeholder values after your staging host is live.
+
+name = "Send Invoice Staging"
+client_id = "your_staging_api_key_here"
+application_url = "https://staging.sendinvoice.yourdomain.com"
+
+[auth]
+redirect_urls = [
+  "https://staging.sendinvoice.yourdomain.com/auth/callback"
+]
+
+[access_scopes]
+scopes = "read_orders"
+
+[webhooks]
+api_version = "2026-04"
+
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+uri = "/webhooks/compliance"

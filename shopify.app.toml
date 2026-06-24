@@ -12,3 +12,10 @@ redirect_urls = [
 
 [access_scopes]
 scopes = "read_orders"
+
+[webhooks]
+api_version = "2026-04"
+
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+uri = "/webhooks/compliance"

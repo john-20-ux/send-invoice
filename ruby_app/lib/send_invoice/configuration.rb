@@ -7,6 +7,7 @@ module SendInvoice
                 :auto_sync_enabled,
                 :auto_sync_interval_seconds,
                 :background_backend,
+                :bind_address,
                 :database_path,
                 :host,
                 :port,
@@ -48,6 +49,7 @@ module SendInvoice
       @app_root = File.join(root, "ruby_app")
       @views_path = File.join(@app_root, "views")
       @public_path = File.join(@app_root, "public")
+      @bind_address = env["BIND_ADDRESS"] || "0.0.0.0"
       @database_path = env["DATABASE_PATH"] || File.join(@app_root, "db", "send_invoice.sqlite3")
       @background_backend = (env["BACKGROUND_BACKEND"] || "threads").to_s.strip
       @port = Integer(env["PORT"] || "3000", 10)

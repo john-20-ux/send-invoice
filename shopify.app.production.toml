@@ -1,0 +1,21 @@
+# Shopify production app configuration for App Store submission.
+# Replace the placeholder values before validating and deploying.
+
+name = "Send Invoice"
+client_id = "your_production_api_key_here"
+application_url = "https://app.sendinvoice.yourdomain.com"
+
+[auth]
+redirect_urls = [
+  "https://app.sendinvoice.yourdomain.com/auth/callback"
+]
+
+[access_scopes]
+scopes = "read_orders"
+
+[webhooks]
+api_version = "2026-04"
+
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+uri = "/webhooks/compliance"

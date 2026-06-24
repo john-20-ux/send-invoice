@@ -447,6 +447,101 @@ class SendInvoiceAppTest < Minitest::Test
     clear_shopify_env
   end
 
+  def test_compliance_customer_data_request_reports_matching_orders
+    client = FakeShopifyClient.new
+    store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: client)
+    shop_domain = "sync-test.myshopify.com"
+    order = SendInvoice::MockData.orders.first.merge(
+      "shop_domain" => shop_domain,
+      "updated_at" => SendInvoice::MockData.orders.first["updated_at"] || SendInvoice::MockData.orders.first["created_at"],
+      "synced_at" => Time.now.utc.iso8601
+    )
+    store.upsert_orders([order])
+    body = JSON.generate({
+      "shop_domain" => shop_domain,
+      "customer" => {
+        "id" => order["customer_id"],
+        "email" => order["customer_email"]
+      }
+    })
+
+    response = perform(app, "POST", "/webhooks/compliance", {}, [], body, webhook_headers(body, topic: "customers/data_request"))
+
+    assert_equal 200, response.status
+    payload = JSON.parse(response.body)
+    assert_equal true, payload["received"]
+    assert_equal 1, payload["ordersMatched"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_compliance_customer_redact_clears_customer_fields_from_orders
+    client = FakeShopifyClient.new
+    store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: client)
+    shop_domain = "sync-test.myshopify.com"
+    order = SendInvoice::MockData.orders.first.merge(
+      "shop_domain" => shop_domain,
+      "updated_at" => SendInvoice::MockData.orders.first["updated_at"] || SendInvoice::MockData.orders.first["created_at"],
+      "synced_at" => Time.now.utc.iso8601
+    )
+    store.upsert_orders([order])
+    body = JSON.generate({
+      "shop_domain" => shop_domain,
+      "customer" => {
+        "id" => order["customer_id"],
+        "email" => order["customer_email"]
+      }
+    })
+
+    response = perform(app, "POST", "/webhooks/compliance", {}, [], body, webhook_headers(body, topic: "customers/redact"))
+
+    assert_equal 200, response.status
+    payload = JSON.parse(response.body)
+    assert_equal 1, payload["redactedOrders"]
+
+    redacted_order = store.orders(shop_domain, limit: 1)["orders"].first
+    assert_nil redacted_order["customer_id"]
+    assert_nil redacted_order["customer_first_name"]
+    assert_nil redacted_order["customer_last_name"]
+    assert_nil redacted_order["customer_email"]
+    assert_nil redacted_order["customer_phone"]
+    assert_nil redacted_order.dig("raw_data", "customer")
+    assert_nil redacted_order.dig("raw_data", "shippingAddress", "name")
+    assert_nil redacted_order.dig("raw_data", "billingAddress", "address1")
+    assert_nil redacted_order.dig("raw_data", "note")
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_compliance_shop_redact_deletes_shop_and_order_data
+    client = FakeShopifyClient.new
+    store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: client)
+    shop_domain = "sync-test.myshopify.com"
+    order = SendInvoice::MockData.orders.first.merge(
+      "shop_domain" => shop_domain,
+      "updated_at" => SendInvoice::MockData.orders.first["updated_at"] || SendInvoice::MockData.orders.first["created_at"],
+      "synced_at" => Time.now.utc.iso8601
+    )
+    store.upsert_orders([order])
+    body = JSON.generate({ "shop_domain" => shop_domain })
+
+    response = perform(app, "POST", "/webhooks/compliance", {}, [], body, webhook_headers(body, topic: "shop/redact"))
+
+    assert_equal 200, response.status
+    payload = JSON.parse(response.body)
+    assert_equal true, payload["deletedShopData"]
+    assert_nil store.shop(shop_domain)
+    assert_equal 0, store.orders(shop_domain, limit: 10)["total"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
   def test_trigger_queues_incremental_request_when_db_queue_backend_enabled
     store, sync_engine, _shopify_client, database_path = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     shop = store.shop("sync-test.myshopify.com")

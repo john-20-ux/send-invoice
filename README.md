@@ -68,6 +68,44 @@ Then start from:
 /auth?shop=your-store.myshopify.com
 ```
 
+## Render Staging
+
+This repo now includes:
+
+- a basic Render blueprint in [render.yaml](render.yaml)
+- a staging Shopify app config in [shopify.app.staging.toml](shopify.app.staging.toml)
+- a production Shopify app config in [shopify.app.production.toml](shopify.app.production.toml)
+- a compliance webhook endpoint at `/webhooks/compliance`
+
+Recommended staging setup:
+
+1. Create a Render Web Service from this repo.
+2. Attach a persistent disk mounted at `/var/data`.
+3. Set `HOST` to your real HTTPS staging URL, for example `https://staging.sendinvoice.yourdomain.com`.
+4. Set `SHOPIFY_API_KEY` and `SHOPIFY_API_SECRET` from your staging app in Shopify Partners.
+5. Keep `MOCK_MODE=false`.
+6. Point Shopify staging config at the same URL and callback:
+
+```toml
+application_url = "https://staging.sendinvoice.yourdomain.com"
+
+[auth]
+redirect_urls = ["https://staging.sendinvoice.yourdomain.com/auth/callback"]
+```
+
+7. After the Render service is live, validate and deploy the Shopify app config:
+
+```bash
+shopify app config validate --json --config staging
+shopify app deploy --config staging
+```
+
+Both staging and production Shopify configs declare the required App Store compliance topics:
+
+- `customers/data_request`
+- `customers/redact`
+- `shop/redact`
+
 The Ruby app stores shops, orders, sync logs, and UI settings in SQLite at `ruby_app/db/send_invoice.sqlite3` by default.
 
 ### Order Sync Flow

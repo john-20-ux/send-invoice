@@ -120,6 +120,8 @@ module SendInvoice
         handle_bulk_operations_finish_webhook
       when ["POST", "/webhooks/app-uninstalled"]
         handle_app_uninstalled_webhook
+      when ["POST", "/webhooks/compliance"]
+        handle_compliance_webhook
       when ["POST", "/webhooks/orders-changed"]
         handle_orders_changed_webhook
       when ["GET", "/onboarding"], ["GET", "/onboarding/step-1"]
@@ -953,6 +955,58 @@ module SendInvoice
       })
     end
 
+    def handle_compliance_webhook
+      raw_body = @request.body.to_s
+      hmac = header_value("x-shopify-hmac-sha256")
+      raise UnauthorizedError, "Invalid webhook signature" unless @shopify_client.verify_webhook_hmac(raw_body, hmac)
+
+      topic = header_value("x-shopify-topic").to_s
+      allowed_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+      raise UnauthorizedError, "Unexpected webhook topic" unless allowed_topics.include?(topic)
+
+      payload = JSON.parse(raw_body)
+      shop_domain = compliance_shop_domain(payload)
+
+      case topic
+      when "customers/data_request"
+        customer = compliance_customer_identity(payload)
+        orders = @store.customer_data_request_orders(
+          shop_domain: shop_domain,
+          customer_id: customer["id"],
+          customer_email: customer["email"]
+        )
+        respond_json({
+          received: true,
+          topic: topic,
+          shopDomain: shop_domain,
+          ordersMatched: orders.length
+        })
+      when "customers/redact"
+        customer = compliance_customer_identity(payload)
+        redacted = @store.redact_customer_data(
+          shop_domain: shop_domain,
+          customer_id: customer["id"],
+          customer_email: customer["email"]
+        )
+        respond_json({
+          received: true,
+          topic: topic,
+          shopDomain: shop_domain,
+          redactedOrders: redacted
+        })
+      when "shop/redact"
+        deleted = @store.shop(shop_domain) ? @store.delete_shop_data(shop_domain) : false
+        respond_json({
+          received: true,
+          topic: topic,
+          shopDomain: shop_domain,
+          deletedShopData: deleted
+        })
+      end
+    rescue JSON::ParserError
+      respond_json({ error: "Invalid webhook payload" }, status: 400)
+    end
+
     def register_shop_webhooks(shop_domain, access_token)
       @shopify_client.ensure_webhook_subscription(
         shop_domain,
@@ -1012,6 +1066,22 @@ module SendInvoice
       @response.status = status
       @response["Content-Type"] = "application/json; charset=utf-8"
       @response.body = JSON.generate(payload)
+    end
+
+    def compliance_shop_domain(payload)
+      shop_domain = payload["shop_domain"].to_s
+      shop_domain = header_value("x-shopify-shop-domain").to_s if shop_domain.empty?
+      raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+
+      shop_domain
+    end
+
+    def compliance_customer_identity(payload)
+      customer = payload["customer"].is_a?(Hash) ? payload["customer"] : {}
+      {
+        "id" => customer["id"].to_s,
+        "email" => customer["email"].to_s
+      }
     end
 
     def redirect_to(path)

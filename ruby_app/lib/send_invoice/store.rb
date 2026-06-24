@@ -128,6 +128,39 @@ module SendInvoice
       true
     end
 
+    def customer_data_request_orders(shop_domain:, customer_id: nil, customer_email: nil)
+      with_matching_customer_orders(shop_domain: shop_domain, customer_id: customer_id, customer_email: customer_email) do |db, sql, values|
+        db.execute("SELECT id, name, created_at, updated_at FROM orders WHERE #{sql} ORDER BY created_at DESC, rowid DESC", values).map do |row|
+          {
+            "id" => row["id"],
+            "name" => row["name"],
+            "created_at" => row["created_at"],
+            "updated_at" => row["updated_at"]
+          }
+        end
+      end
+    end
+
+    def redact_customer_data(shop_domain:, customer_id: nil, customer_email: nil)
+      with_matching_customer_orders(shop_domain: shop_domain, customer_id: customer_id, customer_email: customer_email) do |db, sql, values|
+        rows = db.execute("SELECT id, raw_data FROM orders WHERE #{sql}", values)
+        rows.each do |row|
+          db.execute(<<~SQL, [nil, nil, nil, nil, nil, redact_order_raw_data(row["raw_data"]), Time.now.utc.iso8601, row["id"], shop_domain])
+            UPDATE orders
+            SET customer_id = ?,
+                customer_first_name = ?,
+                customer_last_name = ?,
+                customer_email = ?,
+                customer_phone = ?,
+                raw_data = ?,
+                synced_at = ?
+            WHERE id = ? AND shop_domain = ?
+          SQL
+        end
+        rows.length
+      end
+    end
+
     def claim_sync_command_lock(shop_domain, command_key, owner_id:, locked_at: Time.now.utc.iso8601)
       changed = @database.with_connection do |db|
         db.execute(<<~SQL, [shop_domain, command_key, owner_id, locked_at, locked_at])
@@ -1201,6 +1234,49 @@ module SendInvoice
         JSON.generate(order["raw_data"]),
         order["synced_at"] || Time.now.utc.iso8601
       ]
+    end
+
+    def with_matching_customer_orders(shop_domain:, customer_id:, customer_email:)
+      values = [shop_domain]
+      filters = []
+
+      unless customer_id.to_s.strip.empty?
+        filters << "customer_id = ?"
+        values << customer_id.to_s
+      end
+
+      unless customer_email.to_s.strip.empty?
+        filters << "LOWER(customer_email) = ?"
+        values << customer_email.to_s.downcase
+      end
+
+      return [] if filters.empty?
+
+      sql = "shop_domain = ? AND (#{filters.join(' OR ')})"
+      @database.with_connection do |db|
+        yield db, sql, values
+      end
+    end
+
+    def redact_order_raw_data(raw_data)
+      payload = JSON.parse(raw_data.to_s)
+      payload.delete("customer")
+      payload["shippingAddress"] = redact_address(payload["shippingAddress"]) if payload["shippingAddress"].is_a?(Hash)
+      payload["billingAddress"] = redact_address(payload["billingAddress"]) if payload["billingAddress"].is_a?(Hash)
+      payload["note"] = nil if payload.key?("note")
+      JSON.generate(payload)
+    rescue JSON::ParserError
+      JSON.generate({})
+    end
+
+    def redact_address(address)
+      address.each_with_object({}) do |(key, value), memo|
+        memo[key] = redact_address_field?(key) ? nil : value
+      end
+    end
+
+    def redact_address_field?(key)
+      %w[name firstName lastName company address1 address2 city province zip country phone].include?(key.to_s)
     end
   end
 end

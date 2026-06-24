@@ -34,7 +34,7 @@ module SendInvoice
 
       server = WEBrick::HTTPServer.new(
         Port: config.port,
-        BindAddress: "127.0.0.1",
+        BindAddress: config.bind_address,
         AccessLog: [],
         Logger: WEBrick::Log.new($stdout, WEBrick::Log::INFO)
       )
@@ -46,7 +46,8 @@ module SendInvoice
       trap("INT") { server.shutdown }
       trap("TERM") { server.shutdown }
 
-      puts "Ruby app listening on http://localhost:#{config.port}"
+      puts "Ruby app listening on #{config.bind_address}:#{config.port}"
+      puts "Configured host: #{config.host}"
       puts "Mode: #{config.mock_mode? ? 'mock' : 'shopify'}"
       server.start
     end
