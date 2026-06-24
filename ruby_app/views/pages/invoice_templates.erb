@@ -8,7 +8,7 @@
 
     <div class="field">
       <label for="template">Template style</label>
-      <select id="template" name="template">
+      <select id="template" name="template" data-preview-template>
         <% %w[classic modern minimal bold clean compact].each do |template| %>
           <option value="<%= template %>" <%= @invoice_config["template"] == template ? "selected" : "" %>><%= template.capitalize %></option>
         <% end %>
@@ -97,7 +97,7 @@
     </div>
   </section>
 
-  <section class="template-preview" id="invoice-preview">
+  <section class="template-preview" id="invoice-preview" data-template="<%= h(@invoice_config["template"]) %>">
     <% symbol = @invoice_config["currency_symbol"] %>
     <% line_subtotal = @invoice_config["line_items"].sum do |line_item|
          quantity = line_item["qty"].to_f
@@ -114,6 +114,7 @@
        end %>
     <header class="preview-header">
       <div>
+        <span class="preview-style-badge" data-role="template-style-label"><%= h(@invoice_config["template"].capitalize) %></span>
         <h2 data-preview-key="company_name"><%= h(@invoice_config["company_name"]) %></h2>
         <p class="muted" data-preview-key="tagline"><%= h(@invoice_config["tagline"]) %></p>
       </div>

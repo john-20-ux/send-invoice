@@ -382,6 +382,15 @@
     var preview = $("#invoice-preview");
     if (!form || !preview) return;
 
+    function applyTemplateStyle(value) {
+      var template = value || "classic";
+      preview.dataset.template = template;
+      var label = $('[data-role="template-style-label"]', preview);
+      if (label) {
+        label.textContent = template.charAt(0).toUpperCase() + template.slice(1);
+      }
+    }
+
     form.querySelectorAll("[data-preview-text]").forEach(function (field) {
       field.addEventListener("input", function () {
         var key = field.getAttribute("data-preview-text");
@@ -399,6 +408,14 @@
         });
       });
     });
+
+    var templateSelect = form.querySelector("[data-preview-template]");
+    if (templateSelect) {
+      applyTemplateStyle(templateSelect.value);
+      templateSelect.addEventListener("change", function () {
+        applyTemplateStyle(templateSelect.value);
+      });
+    }
   }
 
   bootSyncPolling();

@@ -58,6 +58,48 @@ class SendInvoiceAppTest < Minitest::Test
     assert_equal 3, payload["totalPages"]
   end
 
+  def test_orders_page_renders_selected_order_workspace
+    app, store = build_app(onboarded: true, order_count: 12)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(app, "GET", "/orders", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "order_id" => order["id"]
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Order overview"
+    assert_includes response.body, order["name"]
+    assert_includes response.body, "Back to orders"
+    assert_includes response.body, "View order"
+  end
+
+  def test_orders_page_shows_not_found_state_for_missing_order
+    app, = build_app(onboarded: true, order_count: 12)
+
+    response = perform(app, "GET", "/orders", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "order_id" => "gid://shopify/Order/missing"
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Order not found"
+    assert_includes response.body, "We could not find that order in the synced data for this shop."
+  end
+
+  def test_invoice_templates_page_exposes_selected_template_preview_state
+    app, = build_app(onboarded: true, order_count: 12)
+
+    response = perform(app, "GET", "/invoice-templates", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, 'data-preview-template'
+    assert_includes response.body, 'data-template="classic"'
+    assert_includes response.body, 'data-role="template-style-label"'
+  end
+
   def test_queue_ops_page_renders_history_and_diagnostics
     store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new, "BACKGROUND_BACKEND" => "db_queue")
     app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
