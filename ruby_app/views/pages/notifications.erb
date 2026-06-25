@@ -1,4 +1,22 @@
 <form method="post" action="/notifications" class="cards-grid">
+  <section class="section-card" style="grid-column:1 / -1">
+    <p class="eyebrow">Delivery mode</p>
+    <h2>Email delivery</h2>
+    <p class="section-note">
+      <% if @invoice_delivery_mode == "smtp" %>
+        SMTP is configured. Invoices sent from the order detail page go out directly by email.
+      <% else %>
+        SMTP is not configured yet. Invoices sent from the order detail page are saved to the local outbox for review.
+      <% end %>
+    </p>
+    <p class="muted" style="margin-top:10px">
+      Supported placeholders:
+      <% @notification_placeholders.each do |token| %>
+        <code>{{<%= token %>}}</code><%= token == @notification_placeholders.last ? "" : ", " %>
+      <% end %>
+    </p>
+  </section>
+
   <% {
     "email" => { "title" => "Email", "description" => "Send invoices and updates by email." },
     "whatsapp" => { "title" => "WhatsApp", "description" => "Send invoice messages through WhatsApp." },

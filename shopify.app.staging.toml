@@ -2,12 +2,17 @@
 # Replace the placeholder values after your staging host is live.
 
 name = "Send Invoice Staging"
-client_id = "your_staging_api_key_here"
+client_id = "004bf076589503625e9ba0d6bd4b8804"
 application_url = "https://staging.sendinvoice.yourdomain.com"
+
+# Standalone app: Shopify opens it full-page in a new tab instead of inside the
+# admin iframe. This app uses its own UI (no App Bridge/Polaris), so embedding
+# would be blocked by the browser (no frame-ancestors CSP).
+embedded = false
 
 [auth]
 redirect_urls = [
-  "https://staging.sendinvoice.yourdomain.com/auth/callback"
+  "https://staging.sendinvoice.jens-ttjvfvpi.myshopify.com/auth/callback"
 ]
 
 [access_scopes]

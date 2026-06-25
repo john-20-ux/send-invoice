@@ -8,7 +8,7 @@
   </head>
   <body class="print-body">
     <div class="print-toolbar">
-      <a href="/vendors" class="button button-ghost">Back to vendors</a>
+      <a href="<%= h(@print_back_path || "/vendors") %>" class="button button-ghost">Back</a>
       <button type="button" class="button" onclick="window.print()">Print or Save PDF</button>
     </div>
     <main class="print-sheet">

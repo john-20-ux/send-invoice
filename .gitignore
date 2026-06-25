@@ -17,6 +17,7 @@ dist-ssr
 .env.local
 .env.*.local
 ruby_app/db/*.sqlite3
+ruby_app/tmp/
 vendor/bundle
 .bundle
 worker_sidecar/storage/

@@ -66,6 +66,13 @@ module SendInvoice
           topic: "APP_UNINSTALLED",
           uri: config.app_uninstalled_webhook_uri
         )
+
+        unless config.order_webhooks_enabled?
+          puts "[send-invoice] order webhooks disabled (ENABLE_ORDER_WEBHOOKS not set); " \
+               "skipping ORDERS_* topics for #{shop['shop_domain']} until Protected Customer Data access is approved."
+          next
+        end
+
         shopify_client.ensure_webhook_subscription(
           shop.fetch("shop_domain"),
           shop.fetch("access_token"),

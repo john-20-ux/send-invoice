@@ -656,6 +656,7 @@ module SendInvoice
         "totalEstimated" => latest["total_estimated"],
         "startedAt" => latest["started_at"],
         "finishedAt" => latest["finished_at"],
+        "errorMessage" => latest["error_message"],
         "lastSyncedAt" => last_completed && last_completed["finished_at"]
       }
     end

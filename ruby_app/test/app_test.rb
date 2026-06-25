@@ -41,6 +41,7 @@ class SendInvoiceAppTest < Minitest::Test
     assert_equal 200, response.status
     assert_includes response.body, "Daily revenue"
     assert_includes response.body, "Order mix"
+    assert_includes response.body, "Sync now"
   end
 
   def test_orders_api_returns_paginated_json
@@ -58,7 +59,7 @@ class SendInvoiceAppTest < Minitest::Test
     assert_equal 3, payload["totalPages"]
   end
 
-  def test_orders_page_renders_selected_order_workspace
+  def test_orders_page_redirects_selected_order_query_to_dedicated_detail_page
     app, store = build_app(onboarded: true, order_count: 12)
     order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
 
@@ -67,11 +68,261 @@ class SendInvoiceAppTest < Minitest::Test
       "order_id" => order["id"]
     })
 
+    assert_equal 302, response.status
+    expected_query = URI.encode_www_form("order_id" => order["id"], "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN)
+    assert_equal "/orders/detail?#{expected_query}", response["Location"]
+  end
+
+  def test_order_detail_page_renders_shopify_style_workspace_and_invoice_tools
+    app, store = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(app, "GET", "/orders/detail", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "order_id" => order["id"]
+    })
+
     assert_equal 200, response.status
-    assert_includes response.body, "Order overview"
+    assert_includes response.body, "Shopify order"
     assert_includes response.body, order["name"]
-    assert_includes response.body, "Back to orders"
-    assert_includes response.body, "View order"
+    assert_includes response.body, "Send invoice"
+    assert_includes response.body, "Preview invoice"
+    assert_includes response.body, "Items in this order"
+    assert_includes response.body, "Transactions"
+    assert_includes response.body, "Recent invoice attempts"
+  end
+
+  def test_order_detail_resolves_after_prior_request_and_with_binary_encoded_id
+    # Reproduces two production-only failures that single-request UTF-8 tests miss:
+    #   1. WEBrick reuses one App instance across requests, so per-request state
+    #      (params) must be reset — otherwise a prior /orders request's cache wins.
+    #   2. WEBrick hands query values back as ASCII-8BIT, which the sqlite3 gem binds
+    #      as a BLOB and never matches the TEXT orders.id column unless re-tagged UTF-8.
+    app, store = build_app(onboarded: true, order_count: 3)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    # Prime the shared App instance with a request that has no order_id.
+    list = perform(app, "GET", "/orders", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+    assert_equal 200, list.status
+
+    binary_id = order["id"].dup.force_encoding(Encoding::ASCII_8BIT)
+    response = perform(app, "GET", "/orders/detail", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "order_id" => binary_id
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Shopify order"
+    assert_includes response.body, order["name"]
+  end
+
+  def test_auth_start_sets_secure_cross_site_session_cookie_for_https_host
+    app, _store, database_path = build_app(onboarded: false, order_count: 4)
+    ENV["HOST"] = "https://example-app.test"
+    ENV["SHOPIFY_API_KEY"] = "test-client-id"
+    ENV["SHOPIFY_API_SECRET"] = "test-client-secret"
+    ENV["MOCK_MODE"] = "false"
+    config = SendInvoice::Configuration.load(root: File.expand_path("../..", __dir__))
+    shopify_client = SendInvoice::ShopifyClient.new(config)
+    store = SendInvoice::Store.new(SendInvoice::Database.new(config))
+    sync_engine = SendInvoice::SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+
+    response = perform(app, "GET", "/auth", { "shop" => "example-store.myshopify.com" })
+
+    assert_equal 302, response.status
+    assert_includes response["Set-Cookie"], "Secure"
+    assert_includes response["Set-Cookie"], "HttpOnly"
+    assert_includes response["Set-Cookie"], "SameSite=None"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_onboarding_without_shop_query_uses_single_installed_shop_context
+    client = FakeShopifyClient.new
+    store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: client)
+
+    response = perform(app, "GET", "/onboarding")
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Merchant contact"
+    refute_includes response.body, "Connect Shopify before the app can load."
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_onboarding_step_three_exposes_shop_domain_for_sync_requests
+    client = FakeShopifyClient.new
+    store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: client)
+
+    response = perform(app, "GET", "/onboarding/step-3", {
+      "shop" => "sync-test.myshopify.com"
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, 'data-shop-domain="sync-test.myshopify.com"'
+    assert_includes response.body, 'data-api-path="/api/sync"'
+    assert_includes response.body, 'data-status-path="/api/sync/status"'
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_onboarding_step_three_renders_protected_order_access_failure_state
+    client = FakeShopifyClient.new
+    store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
+    store.create_sync_log("sync-test.myshopify.com", total_estimated: 0).tap do |log|
+      store.fail_sync_log(
+        log["id"],
+        "Shopify GraphQL error: This app is not approved to access the Order object. See https://shopify.dev/docs/apps/launch/protected-customer-data for more details."
+      )
+    end
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: client)
+
+    response = perform(app, "GET", "/onboarding/step-3", {
+      "shop" => "sync-test.myshopify.com"
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Sync failed"
+    assert_includes response.body, "Shopify is blocking order access for this app."
+    assert_includes response.body, "Enable protected customer data access for this app in Shopify Partner Dashboard, then retry the sync."
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_api_sync_accepts_shop_from_query_string_on_json_post
+    store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+
+    response = perform(
+      app,
+      "POST",
+      "/api/sync",
+      { "shop" => "sync-test.myshopify.com" },
+      [],
+      JSON.generate({ "type" => "first_time" }),
+      { "Content-Type" => "application/json" }
+    )
+
+    assert_equal 200, response.status
+    payload = JSON.parse(response.body)
+    assert_equal true, payload["started"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_api_sync_status_includes_error_message_for_failed_sync
+    store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+    log = store.create_sync_log("sync-test.myshopify.com", total_estimated: 0)
+    store.fail_sync_log(log["id"], "protected access denied")
+
+    response = perform(app, "GET", "/api/sync/status", {
+      "shop" => "sync-test.myshopify.com"
+    })
+
+    assert_equal 200, response.status
+    payload = JSON.parse(response.body)
+    assert_equal "failed", payload["status"]
+    assert_equal "protected access denied", payload["errorMessage"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_order_invoice_pdf_download_returns_pdf_bytes
+    app, store = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(
+      app,
+      "GET",
+      "/orders/invoice.pdf",
+      { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN, "order_id" => order["id"] }
+    )
+
+    assert_equal 200, response.status
+    assert_equal "application/pdf", response["Content-Type"]
+    assert_match(/\A%PDF-1\.4/, response.body)
+  ensure
+    clear_shopify_env
+  end
+
+  def test_send_order_invoice_writes_local_outbox_and_records_delivery
+    outbox_path = File.join(Dir.tmpdir, "send_invoice_outbox_#{Process.pid}_#{rand(1_000_000)}")
+    ENV["OUTBOX_PATH"] = outbox_path
+    app, store, database_path = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(
+      app,
+      "POST",
+      "/orders/send-invoice",
+      {
+        "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+        "order_id" => order["id"],
+        "recipient_email" => "buyer@example.com",
+        "email_subject" => "Invoice for #{order['name']}",
+        "email_body" => "Please find your invoice attached."
+      }
+    )
+
+    assert_equal 302, response.status
+    delivery = store.latest_invoice_delivery(SendInvoice::MockData::DEMO_SHOP_DOMAIN, order["id"])
+    assert_equal "outbox", delivery["delivery_status"]
+    assert_equal "local_outbox", delivery["delivery_channel"]
+    assert_equal "buyer@example.com", delivery["recipient_email"]
+    assert File.exist?(delivery["outbox_path"])
+  ensure
+    FileUtils.rm_rf(outbox_path) if outbox_path
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_migrator_normalizes_blob_shop_domains_to_text
+    database_path = File.join(Dir.tmpdir, "send_invoice_blob_fix_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
+    root = File.expand_path("../..", __dir__)
+    ENV["DATABASE_PATH"] = database_path
+    config = SendInvoice::Configuration.load(root: root)
+    database = SendInvoice::Database.new(config)
+    SendInvoice::Migrator.new(database).run
+
+    database.with_connection do |db|
+      db.execute("PRAGMA foreign_keys = OFF")
+      db.execute("INSERT INTO shops (id, shop_domain, installed_at, updated_at, onboarded, current_plan, trial_started_at, tax_rate, currency, font_name, notification_config, invoice_template_config, vendor_edits) VALUES (?, CAST(? AS BLOB), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+        "blob-shop-id",
+        "blob-shop.myshopify.com",
+        Time.now.utc.iso8601,
+        Time.now.utc.iso8601,
+        0,
+        "trial",
+        Time.now.utc.iso8601,
+        10.0,
+        "USD ($)",
+        "Avenir Next",
+        "{}",
+        "{}",
+        "{}"
+      ])
+      db.execute("PRAGMA foreign_keys = ON")
+    end
+
+    SendInvoice::Migrator.new(database).run
+
+    database.with_connection do |db|
+      row = db.get_first_row("SELECT typeof(shop_domain) AS kind FROM shops WHERE CAST(shop_domain AS TEXT) = ?", "blob-shop.myshopify.com")
+      assert_equal "text", row["kind"]
+    end
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
   end
 
   def test_orders_page_shows_not_found_state_for_missing_order
@@ -136,6 +387,29 @@ class SendInvoiceAppTest < Minitest::Test
     assert_includes response.body, 'checked'
     assert_includes response.body, 'name="line_desc_0"'
     assert_includes response.body, 'Support and handling'
+  end
+
+  def test_notifications_page_shows_delivery_mode_and_placeholders
+    app, = build_app(onboarded: true, order_count: 4)
+
+    response = perform(app, "GET", "/notifications", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN
+    })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Email delivery"
+    assert_includes response.body, "{{invoice_number}}"
+    assert_includes response.body, "local outbox"
+  end
+
+  def test_public_privacy_policy_page_renders
+    app, = build_app(onboarded: false, order_count: 2)
+
+    response = perform(app, "GET", "/legal/privacy")
+
+    assert_equal 200, response.status
+    assert_includes response.body, "Privacy Policy"
+    assert_includes response.body, "Send Invoice processes order and customer information"
   end
 
   def test_queue_ops_page_renders_history_and_diagnostics
@@ -1860,6 +2134,15 @@ class SendInvoiceAppTest < Minitest::Test
     ENV.delete("SHOPIFY_API_SECRET")
     ENV.delete("MOCK_MODE")
     ENV.delete("BACKGROUND_BACKEND")
+    ENV.delete("OUTBOX_PATH")
+    ENV.delete("SMTP_HOST")
+    ENV.delete("SMTP_PORT")
+    ENV.delete("SMTP_USERNAME")
+    ENV.delete("SMTP_PASSWORD")
+    ENV.delete("SMTP_AUTHENTICATION")
+    ENV.delete("SMTP_FROM_EMAIL")
+    ENV.delete("SMTP_FROM_NAME")
+    ENV.delete("SMTP_USE_TLS")
   end
 
   def perform(app, method, path, query = {}, cookies = [], body = "", headers = {})
