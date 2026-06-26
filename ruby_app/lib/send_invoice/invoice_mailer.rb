@@ -53,11 +53,13 @@ module SendInvoice
       boundary = "send-invoice-#{SecureRandom.hex(12)}"
       encoded_pdf = [pdf_bytes].pack("m0")
 
+      header_filename = quoted_header_value(filename)
+
       lines = []
-      lines << "From: #{from_name} <#{from_email}>"
-      lines << "To: #{to}"
-      lines << "Reply-To: #{reply_to}" unless reply_to.to_s.empty?
-      lines << "Subject: #{subject}"
+      lines << "From: #{header_value(from_name)} <#{header_value(from_email)}>"
+      lines << "To: #{header_value(to)}"
+      lines << "Reply-To: #{header_value(reply_to)}" unless reply_to.to_s.empty?
+      lines << "Subject: #{header_value(subject)}"
       lines << "Message-ID: #{message_id}"
       lines << "MIME-Version: 1.0"
       lines << "Content-Type: multipart/mixed; boundary=#{boundary}"
@@ -69,14 +71,27 @@ module SendInvoice
       lines << body.to_s
       lines << ""
       lines << "--#{boundary}"
-      lines << "Content-Type: application/pdf; name=\"#{filename}\""
+      lines << "Content-Type: application/pdf; name=\"#{header_filename}\""
       lines << "Content-Transfer-Encoding: base64"
-      lines << "Content-Disposition: attachment; filename=\"#{filename}\""
+      lines << "Content-Disposition: attachment; filename=\"#{header_filename}\""
       lines << ""
       lines << encoded_pdf.scan(/.{1,76}/).join("\r\n")
       lines << "--#{boundary}--"
       lines << ""
       lines.join("\r\n")
+    end
+
+    # Prevent email header injection: any value interpolated into a header line
+    # must not contain CR/LF (which would start a new header) or other control
+    # characters. Callers may pass merchant-supplied subjects and saved drafts,
+    # so sanitize here rather than trusting every call site.
+    def header_value(raw)
+      raw.to_s.gsub(/[\r\n]+/, " ").gsub(/[[:cntrl:]]/, "").strip
+    end
+
+    # Header value that also lives inside double quotes (e.g. filename="...").
+    def quoted_header_value(raw)
+      header_value(raw).delete('"')
     end
 
     def send_via_smtp(from_email, to, message)

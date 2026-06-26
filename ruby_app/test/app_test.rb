@@ -286,6 +286,39 @@ class SendInvoiceAppTest < Minitest::Test
     clear_shopify_env
   end
 
+  def test_send_order_invoice_strips_crlf_to_prevent_email_header_injection
+    outbox_path = File.join(Dir.tmpdir, "send_invoice_outbox_#{Process.pid}_#{rand(1_000_000)}")
+    ENV["OUTBOX_PATH"] = outbox_path
+    app, store, database_path = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(
+      app,
+      "POST",
+      "/orders/send-invoice",
+      {
+        "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+        "order_id" => order["id"],
+        "recipient_email" => "buyer@example.com",
+        "email_subject" => "Invoice\r\nBcc: attacker@evil.com",
+        "email_body" => "Please find your invoice attached."
+      }
+    )
+
+    assert_equal 302, response.status
+    delivery = store.latest_invoice_delivery(SendInvoice::MockData::DEMO_SHOP_DOMAIN, order["id"])
+    mime = File.read(delivery["outbox_path"])
+
+    # The injected header must not have become its own header line.
+    refute_match(/^Bcc:/i, mime)
+    # The Subject stays on a single folded-free line with the CRLF collapsed.
+    assert_includes mime, "Subject: Invoice Bcc: attacker@evil.com"
+  ensure
+    FileUtils.rm_rf(outbox_path) if outbox_path
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
   def test_migrator_normalizes_blob_shop_domains_to_text
     database_path = File.join(Dir.tmpdir, "send_invoice_blob_fix_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
     root = File.expand_path("../..", __dir__)
