@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require "base64"
 require "fileutils"
 require "securerandom"
+require "mail"
 
 module SendInvoice
   class InvoiceMailer
@@ -11,12 +11,8 @@ module SendInvoice
     end
 
     def deliver(to:, subject:, body:, pdf_bytes:, filename:, reply_to: nil)
-      message_id = "<#{SecureRandom.hex(12)}@send-invoice.local>"
-      from_name = @config.smtp_from_name.to_s.empty? ? "Send Invoice" : @config.smtp_from_name
-      from_email = @config.smtp_from_email.to_s.empty? ? "no-reply@send-invoice.local" : @config.smtp_from_email
-      mime = build_message(
-        from_name: from_name,
-        from_email: from_email,
+      message_id = "#{SecureRandom.hex(12)}@send-invoice.local"
+      mail = build_message(
         to: to,
         subject: subject,
         body: body,
@@ -27,21 +23,21 @@ module SendInvoice
       )
 
       if @config.smtp_configured?
-        send_via_smtp(from_email, to, mime)
+        send_via_smtp(mail)
         {
           "status" => "sent",
           "channel" => "smtp",
           "target" => "#{@config.smtp_host}:#{@config.smtp_port}",
-          "external_message_id" => message_id,
+          "external_message_id" => "<#{message_id}>",
           "outbox_path" => nil
         }
       else
-        outbox_path = write_to_outbox(filename, mime)
+        outbox_path = write_to_outbox(filename, mail.to_s)
         {
           "status" => "outbox",
           "channel" => "local_outbox",
           "target" => outbox_path,
-          "external_message_id" => message_id,
+          "external_message_id" => "<#{message_id}>",
           "outbox_path" => outbox_path
         }
       end
@@ -49,66 +45,47 @@ module SendInvoice
 
     private
 
-    def build_message(from_name:, from_email:, to:, subject:, body:, pdf_bytes:, filename:, message_id:, reply_to:)
-      boundary = "send-invoice-#{SecureRandom.hex(12)}"
-      encoded_pdf = [pdf_bytes].pack("m0")
+    def build_message(to:, subject:, body:, pdf_bytes:, filename:, message_id:, reply_to:)
+      from_name = @config.smtp_from_name.to_s.empty? ? "Send Invoice" : @config.smtp_from_name
+      from_email = @config.smtp_from_email.to_s.empty? ? "no-reply@send-invoice.local" : @config.smtp_from_email
+      attachment_name = sanitize_header(filename)
 
-      header_filename = quoted_header_value(filename)
-
-      lines = []
-      lines << "From: #{header_value(from_name)} <#{header_value(from_email)}>"
-      lines << "To: #{header_value(to)}"
-      lines << "Reply-To: #{header_value(reply_to)}" unless reply_to.to_s.empty?
-      lines << "Subject: #{header_value(subject)}"
-      lines << "Message-ID: #{message_id}"
-      lines << "MIME-Version: 1.0"
-      lines << "Content-Type: multipart/mixed; boundary=#{boundary}"
-      lines << ""
-      lines << "--#{boundary}"
-      lines << "Content-Type: text/plain; charset=UTF-8"
-      lines << "Content-Transfer-Encoding: 8bit"
-      lines << ""
-      lines << body.to_s
-      lines << ""
-      lines << "--#{boundary}"
-      lines << "Content-Type: application/pdf; name=\"#{header_filename}\""
-      lines << "Content-Transfer-Encoding: base64"
-      lines << "Content-Disposition: attachment; filename=\"#{header_filename}\""
-      lines << ""
-      lines << encoded_pdf.scan(/.{1,76}/).join("\r\n")
-      lines << "--#{boundary}--"
-      lines << ""
-      lines.join("\r\n")
+      mail = Mail.new
+      mail.from = from_address(from_email, from_name)
+      mail.to = sanitize_header(to)
+      mail.reply_to = sanitize_header(reply_to) unless reply_to.to_s.empty?
+      mail.subject = sanitize_header(subject)
+      mail.message_id = message_id
+      mail.body = body.to_s
+      mail.attachments[attachment_name] = { mime_type: "application/pdf", content: pdf_bytes }
+      mail
     end
 
-    # Prevent email header injection: any value interpolated into a header line
-    # must not contain CR/LF (which would start a new header) or other control
-    # characters. Callers may pass merchant-supplied subjects and saved drafts,
-    # so sanitize here rather than trusting every call site.
-    def header_value(raw)
+    def from_address(email, name)
+      address = Mail::Address.new(email)
+      address.display_name = sanitize_header(name)
+      address.format
+    rescue StandardError
+      email
+    end
+
+    # Defense in depth: even though Mail encodes header values, strip CR/LF and
+    # other control characters from anything merchant-supplied (subject, drafts,
+    # filename) before it reaches a header, so no value can inject a new header.
+    def sanitize_header(raw)
       raw.to_s.gsub(/[\r\n]+/, " ").gsub(/[[:cntrl:]]/, "").strip
     end
 
-    # Header value that also lives inside double quotes (e.g. filename="...").
-    def quoted_header_value(raw)
-      header_value(raw).delete('"')
-    end
-
-    def send_via_smtp(from_email, to, message)
-      require "net/smtp"
-
-      smtp = Net::SMTP.new(@config.smtp_host, @config.smtp_port)
-      smtp.enable_starttls_auto if @config.smtp_use_tls
-      authentication = @config.smtp_username.empty? ? nil : @config.smtp_authentication.to_sym
-
-      smtp.start(
-        "localhost",
-        @config.smtp_username.empty? ? nil : @config.smtp_username,
-        @config.smtp_username.empty? ? nil : @config.smtp_password,
-        authentication
-      ) do |smtp_session|
-        smtp_session.send_message(message, from_email, to)
-      end
+    def send_via_smtp(mail)
+      mail.delivery_method(:smtp,
+        address: @config.smtp_host,
+        port: @config.smtp_port,
+        domain: "localhost",
+        user_name: @config.smtp_username.empty? ? nil : @config.smtp_username,
+        password: @config.smtp_username.empty? ? nil : @config.smtp_password,
+        authentication: @config.smtp_username.empty? ? nil : @config.smtp_authentication.to_sym,
+        enable_starttls_auto: @config.smtp_use_tls)
+      mail.deliver!
     end
 
     def write_to_outbox(filename, mime)
