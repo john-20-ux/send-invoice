@@ -58,12 +58,11 @@
           <th class="align-right">Total</th>
           <th>Payment</th>
           <th>Fulfillment</th>
-          <th>Detail</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         <% @order_result["orders"].each do |order| %>
-          <% link = order_detail_path(order["id"], @shop["shop_domain"]) %>
           <tr>
             <td><strong><%= h(order["name"]) %></strong></td>
             <td><%= format_date(order["created_at"]) %></td>
@@ -73,7 +72,13 @@
             <td class="align-right"><%= format_money(order["total_price_amount"], order["total_price_currency"]) %></td>
             <td><span class="<%= badge_class(order["financial_status"]) %>"><%= h(order["financial_status"]) %></span></td>
             <td><span class="<%= badge_class(order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(order["fulfillment_status"] || "UNFULFILLED") %></span></td>
-            <td><a class="button-ghost" href="<%= link %>">View order</a></td>
+            <td>
+              <div class="row-actions">
+                <a class="button-ghost" href="<%= order_detail_path(order["id"], @shop["shop_domain"]) %>">View order</a>
+                <a class="button-ghost" href="<%= order_invoice_path(order["id"], @shop["shop_domain"]) %>" target="_blank" rel="noreferrer">Invoice</a>
+                <a class="button-ghost" href="<%= order_invoice_pdf_path(order["id"], @shop["shop_domain"]) %>">PDF</a>
+              </div>
+            </td>
           </tr>
         <% end %>
       </tbody>

@@ -8,7 +8,7 @@
   style="--invoice-accent:<%= h(document["accent_color"]) %>;--invoice-font:<%= h(document["font_family"]) %>;"
 >
   <header class="preview-header">
-    <div class="preview-branding">
+    <div class="preview-brand">
       <div class="preview-logo-mark"><%= h(document["logo_text"]) %></div>
       <div>
         <span class="preview-style-badge"><%= h(document["template"].to_s.capitalize) %></span>
@@ -23,15 +23,14 @@
     </div>
   </header>
 
-  <section class="preview-parties">
+  <section class="preview-grid">
     <div>
-      <p class="eyebrow">From</p>
-      <p><%= h(document["company_name"]) %></p>
+      <p class="eyebrow">Issuer</p>
       <p><%= h(document["address"]) %></p>
       <p><%= h(document["phone"]) %></p>
       <p><%= h(document["email"]) %></p>
-      <% if document.dig("visible_fields", "website") %><p><%= h(document["website"]) %></p><% end %>
       <% if document.dig("visible_fields", "gst") %><p><%= h(document["gst"]) %></p><% end %>
+      <% if document.dig("visible_fields", "website") %><p><%= h(document["website"]) %></p><% end %>
     </div>
     <div>
       <p class="eyebrow">Bill to</p>
@@ -44,7 +43,7 @@
     </div>
   </section>
 
-  <table class="preview-lines">
+  <table class="preview-line-items">
     <thead>
       <tr>
         <th>Description</th>
@@ -57,8 +56,8 @@
       <% document["line_items"].each do |line_item| %>
         <tr>
           <td>
-            <strong><%= h(line_item["desc"]) %></strong>
-            <% unless line_item["variant"].to_s.empty? %><div class="muted"><%= h(line_item["variant"]) %></div><% end %>
+            <%= h(line_item["desc"]) %>
+            <% unless line_item["variant"].to_s.empty? %><span class="muted">— <%= h(line_item["variant"]) %></span><% end %>
           </td>
           <td class="align-right"><%= line_item["qty"] %></td>
           <td class="align-right"><%= document["currency_symbol"] %><%= format('%.2f', line_item["rate"]) %></td>
@@ -68,18 +67,18 @@
     </tbody>
   </table>
 
-  <div class="preview-footer">
+  <footer class="preview-footer">
     <div>
       <% if document.dig("visible_fields", "notes") %><p class="muted"><%= h(document["notes"]) %></p><% end %>
       <% if document.dig("visible_fields", "bank_details") %><p class="muted" style="margin-top:8px"><%= h(document["bank_details"]) %></p><% end %>
       <% if document.dig("visible_fields", "terms") %><p class="muted" style="margin-top:8px"><%= h(document["terms"]) %></p><% end %>
     </div>
-    <div class="preview-totals">
-      <div><span>Subtotal</span><strong><%= document["currency_symbol"] %><%= format('%.2f', document["subtotal_amount"]) %></strong></div>
-      <div><span>Discounts</span><strong><%= document["currency_symbol"] %><%= format('%.2f', document["discounts_amount"]) %></strong></div>
-      <div><span>Shipping</span><strong><%= document["currency_symbol"] %><%= format('%.2f', document["shipping_amount"]) %></strong></div>
-      <div><span>Tax</span><strong><%= document["currency_symbol"] %><%= format('%.2f', document["tax_amount"]) %></strong></div>
-      <div class="preview-total-line"><span>Total</span><strong><%= document["currency_symbol"] %><%= format('%.2f', document["total_amount"]) %></strong></div>
+    <div class="totals-stack">
+      <span>Subtotal <strong><%= document["currency_symbol"] %><%= format('%.2f', document["subtotal_amount"]) %></strong></span>
+      <span>Discounts <strong><%= document["currency_symbol"] %><%= format('%.2f', document["discounts_amount"]) %></strong></span>
+      <span>Shipping <strong><%= document["currency_symbol"] %><%= format('%.2f', document["shipping_amount"]) %></strong></span>
+      <span>Tax <strong><%= document["currency_symbol"] %><%= format('%.2f', document["tax_amount"]) %></strong></span>
+      <span>Total <strong><%= document["currency_symbol"] %><%= format('%.2f', document["total_amount"]) %></strong></span>
     </div>
-  </div>
+  </footer>
 </section>

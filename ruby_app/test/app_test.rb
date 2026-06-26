@@ -237,6 +237,30 @@ class SendInvoiceAppTest < Minitest::Test
     clear_shopify_env
   end
 
+  def test_order_invoice_preview_uses_selected_template_styling_like_the_studio
+    app, store = build_app(onboarded: true, order_count: 2)
+    store.update_shop(SendInvoice::MockData::DEMO_SHOP_DOMAIN, "invoice_template_config" => { "template" => "ledger" })
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(app, "GET", "/orders/invoice", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "order_id" => order["id"]
+    })
+
+    assert_equal 200, response.status
+    # Renders with the same styled markup as the invoice template studio preview
+    # so the format and alignment match.
+    assert_includes response.body, "template-preview"
+    assert_includes response.body, 'data-template="ledger"'
+    %w[preview-brand preview-grid preview-line-items totals-stack].each do |studio_class|
+      assert_includes response.body, studio_class
+    end
+    # The legacy, unstyled class names must not come back.
+    %w[preview-branding preview-parties preview-lines preview-totals].each do |stale_class|
+      refute_includes response.body, stale_class
+    end
+  end
+
   def test_order_invoice_pdf_download_returns_pdf_bytes
     app, store = build_app(onboarded: true, order_count: 2)
     order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
@@ -250,7 +274,8 @@ class SendInvoiceAppTest < Minitest::Test
 
     assert_equal 200, response.status
     assert_equal "application/pdf", response["Content-Type"]
-    assert_match(/\A%PDF-1\.4/, response.body)
+    assert_match(/\A%PDF-1\.\d/, response.body)
+    assert_includes response.body, "%%EOF"
   ensure
     clear_shopify_env
   end
@@ -356,6 +381,21 @@ class SendInvoiceAppTest < Minitest::Test
   ensure
     FileUtils.rm_f(database_path) if database_path
     clear_shopify_env
+  end
+
+  def test_orders_list_exposes_invoice_and_pdf_actions_per_order
+    app, store = build_app(onboarded: true, order_count: 3)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    response = perform(app, "GET", "/orders", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "row-actions"
+    assert_includes response.body, ">Invoice</a>"
+    assert_includes response.body, ">PDF</a>"
+    encoded_id = ERB::Util.url_encode(order["id"])
+    assert_includes response.body, "/orders/invoice?order_id=#{encoded_id}"
+    assert_includes response.body, "/orders/invoice.pdf?order_id=#{encoded_id}"
   end
 
   def test_orders_page_shows_not_found_state_for_missing_order

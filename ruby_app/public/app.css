@@ -799,6 +799,18 @@ textarea {
   border-spacing: 0;
 }
 
+.row-actions {
+  display: inline-flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.row-actions .button-ghost {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .data-table th,
 .data-table td {
   padding: 10px 12px;
