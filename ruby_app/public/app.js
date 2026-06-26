@@ -619,7 +619,113 @@
     renderLineItems();
   }
 
+  function bootMobileNav() {
+    var toggle = $("[data-nav-toggle]");
+    var overlay = $("[data-nav-overlay]");
+    var sidebar = $("#app-sidebar");
+    if (!toggle || !sidebar) return;
+
+    var body = document.body;
+    var root = document.documentElement;
+    var COLLAPSE_KEY = "si-nav-collapsed";
+    var mobileQuery = window.matchMedia("(max-width: 1040px)");
+
+    function isMobile() {
+      return mobileQuery.matches;
+    }
+
+    // Mobile: the drawer slides over the page (body.nav-open).
+    function isOpen() {
+      return body.classList.contains("nav-open");
+    }
+
+    // Desktop: the panel is hidden to widen the workspace (html.nav-collapsed).
+    function isCollapsed() {
+      return root.classList.contains("nav-collapsed");
+    }
+
+    function setOpen(open) {
+      body.classList.toggle("nav-open", open);
+      syncToggle();
+    }
+
+    function setCollapsed(collapsed) {
+      root.classList.toggle("nav-collapsed", collapsed);
+      try {
+        if (collapsed) {
+          localStorage.setItem(COLLAPSE_KEY, "1");
+        } else {
+          localStorage.removeItem(COLLAPSE_KEY);
+        }
+      } catch (e) {}
+      syncToggle();
+    }
+
+    // Keep the button's accessible state in step with whichever mode is active.
+    function syncToggle() {
+      var expanded = isMobile() ? isOpen() : !isCollapsed();
+      var label = isMobile()
+        ? (isOpen() ? "Close navigation menu" : "Open navigation menu")
+        : (isCollapsed() ? "Show sidebar" : "Hide sidebar");
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      toggle.setAttribute("aria-label", label);
+    }
+
+    toggle.addEventListener("click", function () {
+      if (isMobile()) {
+        setOpen(!isOpen());
+      } else {
+        setCollapsed(!isCollapsed());
+      }
+    });
+
+    if (overlay) {
+      overlay.addEventListener("click", function () {
+        setOpen(false);
+      });
+    }
+
+    // Close the mobile drawer after tapping a destination so it doesn't linger over the new page.
+    sidebar.addEventListener("click", function (event) {
+      if (isMobile() && event.target.closest("a")) setOpen(false);
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && isMobile() && isOpen()) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+
+    // The drawer and the collapsed panel are independent states; reset the drawer
+    // when crossing back to the desktop layout, and refresh the button either way.
+    function onModeChange() {
+      if (!isMobile() && isOpen()) setOpen(false);
+      syncToggle();
+    }
+    if (mobileQuery.addEventListener) {
+      mobileQuery.addEventListener("change", onModeChange);
+    } else if (mobileQuery.addListener) {
+      mobileQuery.addListener(onModeChange);
+    }
+
+    syncToggle();
+  }
+
+  function bootDismissibleFlash() {
+    document.querySelectorAll("[data-flash]").forEach(function (flash) {
+      var close = flash.querySelector("[data-flash-close]");
+      if (close) {
+        close.addEventListener("click", function () {
+          flash.classList.add("is-dismissed");
+        });
+      }
+    });
+  }
+
   bootSyncPolling();
   bootOnboardingSync();
   bootInvoicePreview();
+  bootMobileNav();
+  bootDismissibleFlash();
 })();

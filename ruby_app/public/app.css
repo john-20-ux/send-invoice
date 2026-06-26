@@ -194,7 +194,7 @@ textarea {
 
 .topbar-title {
   margin-top: 2px;
-  font-size: 24px;
+  font-size: clamp(19px, 2.4vw, 24px);
   font-weight: 760;
 }
 
@@ -203,6 +203,99 @@ textarea {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.topbar-lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Toggle button — collapses the panel on desktop, opens the drawer on mobile */
+.nav-toggle {
+  display: inline-flex;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nav-toggle:hover {
+  border-color: #b8c1cc;
+}
+
+.nav-toggle-bars,
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transition: transform 200ms ease, opacity 150ms ease;
+}
+
+.nav-toggle-bars {
+  position: relative;
+}
+
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+  content: "";
+  position: absolute;
+  left: 0;
+}
+
+.nav-toggle-bars::before {
+  top: -6px;
+}
+
+.nav-toggle-bars::after {
+  top: 6px;
+}
+
+/* Animate to an X while the drawer is open */
+.nav-open .nav-toggle-bars {
+  background: transparent;
+}
+
+.nav-open .nav-toggle-bars::before {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.nav-open .nav-toggle-bars::after {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
+/* Backdrop behind the off-canvas drawer */
+.nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(20, 24, 28, 0.42);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+/* Desktop: collapse the left panel to a full-width workspace */
+@media (min-width: 1041px) {
+  .nav-collapsed .app-frame {
+    grid-template-columns: 1fr;
+  }
+
+  .nav-collapsed .sidebar {
+    display: none;
+  }
 }
 
 .eyebrow {
@@ -753,6 +846,15 @@ textarea {
   font-size: 13px;
   font-weight: 720;
   white-space: nowrap;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 80ms ease, box-shadow 150ms ease;
+}
+
+/* Tactile press feedback */
+.button:active,
+.button-secondary:active,
+.button-ghost:active,
+.button-danger:active {
+  transform: translateY(1px);
 }
 
 .button {
@@ -790,6 +892,8 @@ textarea {
 
 .table-shell {
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
 }
 
 .data-table {
@@ -1486,22 +1590,145 @@ textarea {
   color: var(--muted);
 }
 
+/* ---- Interactive & accessibility polish ---- */
+
+/* Visible keyboard focus everywhere, without showing a ring on mouse clicks */
+a:focus-visible,
+button:focus-visible,
+.button:focus-visible,
+.button-secondary:focus-visible,
+.button-ghost:focus-visible,
+.button-danger:focus-visible,
+.nav-link:focus-visible,
+.nav-toggle:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Nav links on the dark sidebar need a lighter ring to stay visible */
+.nav-link:focus-visible {
+  outline-color: #ffffff;
+}
+
+.nav-link {
+  transition: background 150ms ease, color 150ms ease;
+}
+
+/* Cards lift slightly on hover to signal they're interactive surfaces */
+.metric-card,
+.template-preset {
+  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
+
+a.metric-card:hover,
+a.template-preset:hover {
+  transform: translateY(-2px);
+}
+
+.data-table tbody tr {
+  transition: background 120ms ease;
+}
+
+/* Dismissible flash messages */
+.flash,
+.flash-error {
+  justify-content: space-between;
+}
+
+.flash-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 150ms ease, background 150ms ease;
+}
+
+.flash-close:hover {
+  opacity: 1;
+  background: rgba(20, 24, 28, 0.08);
+}
+
+.is-dismissed {
+  display: none;
+}
+
+/* Honor users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Tablet: step dense grids down before the full mobile collapse */
+@media (max-width: 1240px) {
+  .grid-four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-content,
+  .topbar {
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+}
+
 @media (max-width: 1040px) {
   .app-frame {
     grid-template-columns: 1fr;
   }
 
+  /* Sidebar becomes an off-canvas drawer that slides in from the left */
   .sidebar {
-    position: static;
-    height: auto;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+    width: min(280px, 84vw);
+    height: 100vh;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform 240ms ease;
   }
 
-  .sidebar-footnote {
-    display: none;
+  .nav-open .sidebar {
+    transform: translateX(0);
+    box-shadow: 0 18px 48px rgba(20, 24, 28, 0.32);
   }
 
-  .nav-stack {
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  /* Roomier tap targets in the drawer */
+  .nav-link {
+    min-height: 44px;
+  }
+
+  .nav-overlay {
+    display: block;
+  }
+
+  .nav-open .nav-overlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Stop the page behind the drawer from scrolling while it's open */
+  .nav-open {
+    overflow: hidden;
   }
 
   .split-layout {
@@ -1577,6 +1804,27 @@ textarea {
   .metric-card .value,
   .value {
     font-size: 24px;
+  }
+
+  /* Keep the hamburger inline with the title, let the meta pills wrap below */
+  .topbar-meta {
+    justify-content: flex-start;
+  }
+
+  /* Action clusters wrap instead of overflowing the row */
+  .row-actions {
+    flex-wrap: wrap;
+  }
+
+  /* Primary actions span the width so they're easy to tap */
+  .toolbar .button,
+  .toolbar .button-secondary,
+  .toolbar .button-ghost,
+  .preview-footer .button,
+  .preview-footer .button-secondary,
+  .button-inline .button,
+  .button-inline .button-secondary {
+    width: 100%;
   }
 
   .public-shell {

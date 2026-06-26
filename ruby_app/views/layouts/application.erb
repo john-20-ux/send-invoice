@@ -5,12 +5,21 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title><%= h(@page_title || "Send Invoice") %></title>
     <link rel="stylesheet" href="/assets/app.css">
+    <script>
+      // Apply the remembered "panel collapsed" preference before paint to avoid a flash.
+      try {
+        if (localStorage.getItem("si-nav-collapsed") === "1") {
+          document.documentElement.classList.add("nav-collapsed");
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body class="app-body">
     <div class="page-noise"></div>
     <% if @shop && @shop["onboarded"] %>
       <div class="app-frame">
-        <aside class="sidebar">
+        <div class="nav-overlay" data-nav-overlay></div>
+        <aside class="sidebar" id="app-sidebar">
           <a href="/dashboard" class="brand">
             <span class="brand-mark">SI</span>
             <span>
@@ -45,9 +54,14 @@
           <%= render_partial("trial_banner", shop: @shop) %>
           <%= render_partial("sync_banner", shop: @shop, sync_status: @sync_status) %>
           <header class="topbar">
-            <div>
-              <p class="eyebrow"><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></p>
-              <h1 class="topbar-title"><%= h(@page_title || "Overview") %></h1>
+            <div class="topbar-lead">
+              <button type="button" class="nav-toggle" data-nav-toggle aria-controls="app-sidebar" aria-expanded="false" aria-label="Open navigation menu">
+                <span class="nav-toggle-bars" aria-hidden="true"></span>
+              </button>
+              <div>
+                <p class="eyebrow"><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></p>
+                <h1 class="topbar-title"><%= h(@page_title || "Overview") %></h1>
+              </div>
             </div>
             <div class="topbar-meta">
               <span class="pill"><%= h(@shop["current_plan"].capitalize) %> plan</span>
@@ -56,8 +70,9 @@
           </header>
 
           <% if @flash %>
-            <div class="<%= flash_class(@flash["type"]) %>">
+            <div class="<%= flash_class(@flash["type"]) %>" data-flash>
               <span><%= h(@flash["message"]) %></span>
+              <button type="button" class="flash-close" data-flash-close aria-label="Dismiss message">&times;</button>
             </div>
           <% end %>
 
@@ -79,8 +94,9 @@
         </header>
 
         <% if @flash %>
-          <div class="<%= flash_class(@flash["type"]) %>">
+          <div class="<%= flash_class(@flash["type"]) %>" data-flash>
             <span><%= h(@flash["message"]) %></span>
+            <button type="button" class="flash-close" data-flash-close aria-label="Dismiss message">&times;</button>
           </div>
         <% end %>
 
