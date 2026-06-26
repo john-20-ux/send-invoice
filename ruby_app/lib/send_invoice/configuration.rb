@@ -10,6 +10,10 @@ module SendInvoice
                 :bind_address,
                 :database_path,
                 :host,
+                :invoice_automation_batch_size,
+                :invoice_automation_enabled,
+                :invoice_automation_poll_interval_seconds,
+                :invoice_public_link_ttl_days,
                 :order_webhooks_enabled,
                 :outbox_path,
                 :port,
@@ -78,6 +82,10 @@ module SendInvoice
       @auto_sync_interval_seconds = [Integer(env["AUTO_SYNC_INTERVAL_SECONDS"] || "300", 10), 60].max
       @uninstall_cleanup_interval_seconds = [Integer(env["UNINSTALL_CLEANUP_INTERVAL_SECONDS"] || "300", 10), 60].max
       @sync_api_secret = env["SYNC_API_SECRET"].to_s
+      @invoice_automation_enabled = env.fetch("INVOICE_AUTOMATION_ENABLED", "true") != "false"
+      @invoice_automation_poll_interval_seconds = [Integer(env["INVOICE_AUTOMATION_POLL_INTERVAL_SECONDS"] || "60", 10), 5].max
+      @invoice_automation_batch_size = [Integer(env["INVOICE_AUTOMATION_BATCH_SIZE"] || "25", 10), 1].max
+      @invoice_public_link_ttl_days = [Integer(env["INVOICE_PUBLIC_LINK_TTL_DAYS"] || "90", 10), 1].max
       @session_cookie_name = env["SESSION_COOKIE_NAME"] || "send_invoice_session"
       @smtp_host = env["SMTP_HOST"].to_s
       @smtp_port = Integer(env["SMTP_PORT"] || "587", 10)
@@ -120,6 +128,14 @@ module SendInvoice
 
     def orders_changed_webhook_uri
       "#{@host.sub(%r{/\z}, '')}/webhooks/orders-changed"
+    end
+
+    def invoice_automation_enabled?
+      @invoice_automation_enabled
+    end
+
+    def invoice_public_link_url(token)
+      "#{@host.sub(%r{/\z}, '')}/invoice-links/#{token}"
     end
   end
 end

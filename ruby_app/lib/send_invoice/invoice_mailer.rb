@@ -10,7 +10,7 @@ module SendInvoice
       @config = config
     end
 
-    def deliver(to:, subject:, body:, pdf_bytes:, filename:, reply_to: nil)
+    def deliver(to:, subject:, body:, filename:, pdf_bytes: nil, reply_to: nil)
       message_id = "#{SecureRandom.hex(12)}@send-invoice.local"
       mail = build_message(
         to: to,
@@ -57,7 +57,7 @@ module SendInvoice
       mail.subject = sanitize_header(subject)
       mail.message_id = message_id
       mail.body = body.to_s
-      mail.attachments[attachment_name] = { mime_type: "application/pdf", content: pdf_bytes }
+      mail.attachments[attachment_name] = { mime_type: "application/pdf", content: pdf_bytes } unless pdf_bytes.nil?
       mail
     end
 

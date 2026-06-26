@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "erb"
 require "json"
 require "securerandom"
@@ -8,6 +9,8 @@ require "uri"
 require "webrick"
 
 require "send_invoice/view_helpers"
+require "send_invoice/invoice_automation_engine"
+require "send_invoice/invoice_composition"
 require "send_invoice/invoice_document"
 require "send_invoice/invoice_mailer"
 require "send_invoice/invoice_pdf"
@@ -16,6 +19,7 @@ require "send_invoice/mock_data"
 module SendInvoice
   class App
     include ViewHelpers
+    include InvoiceComposition
 
     class UnauthorizedError < StandardError; end
     class NotFoundError < StandardError; end
@@ -23,11 +27,20 @@ module SendInvoice
     NAV_ITEMS = [
       { "label" => "Home", "path" => "/dashboard" },
       { "label" => "Orders", "path" => "/orders" },
+      { "label" => "Automations", "path" => "/automations" },
+      { "label" => "Delivery Log", "path" => "/delivery-log" },
       { "label" => "Vendors", "path" => "/vendors" },
       { "label" => "Invoice Templates", "path" => "/invoice-templates" },
       { "label" => "Notifications", "path" => "/notifications" },
       { "label" => "Settings", "path" => "/settings" },
       { "label" => "Support", "path" => "/support" }
+    ].freeze
+
+    AUTOMATION_TRIGGERS = [
+      { "value" => "order_created", "label" => "Order created" },
+      { "value" => "order_paid", "label" => "Order paid" },
+      { "value" => "order_fulfilled", "label" => "Order fulfilled" },
+      { "value" => "payment_reminder_due", "label" => "Payment reminder" }
     ].freeze
 
     ADMIN_NAV_ITEMS = [
@@ -53,11 +66,12 @@ module SendInvoice
       end
     end
 
-    def initialize(config:, store:, sync_engine:, shopify_client:)
+    def initialize(config:, store:, sync_engine:, shopify_client:, automation_engine: nil)
       @config = config
       @store = store
       @sync_engine = sync_engine
       @shopify_client = shopify_client
+      @automation_engine = automation_engine || InvoiceAutomationEngine.new(config: config, store: store)
     end
 
     def handle(req, res)
@@ -159,6 +173,14 @@ module SendInvoice
         download_order_invoice_pdf
       when ["POST", "/orders/send-invoice"]
         handle_send_order_invoice
+      when ["GET", "/automations"]
+        render_automations_index
+      when ["GET", "/automations/new"]
+        render_automation_new
+      when ["POST", "/automations"]
+        handle_automation_create
+      when ["GET", "/delivery-log"]
+        render_delivery_log
       when ["GET", "/queue-ops"]
         render_queue_ops
       when ["POST", "/queue-ops/retry-latest-failed"]
@@ -217,6 +239,14 @@ module SendInvoice
         api_retry_latest_failed_async_request
       when ["POST", "/api/async-requests/retry-all-failed"]
         api_retry_all_failed_async_requests
+      when ["GET", "/api/automations"]
+        api_list_automations
+      when ["POST", "/api/automations"]
+        api_create_automation
+      when ["GET", "/api/delivery-log"]
+        api_delivery_log
+      when ["POST", "/api/automations/process-due"]
+        api_process_due_automations
       else
         return api_order_detail if @request.request_method == "GET" && @request.path.start_with?("/api/orders/")
         return api_retry_async_request if @request.request_method == "POST" && @request.path.start_with?("/api/async-requests/") && @request.path.end_with?("/retry")
@@ -225,6 +255,22 @@ module SendInvoice
         return handle_queue_ops_delete_async_request if @request.request_method == "POST" && @request.path.start_with?("/queue-ops/requests/") && @request.path.end_with?("/delete")
         return handle_queue_ops_retry_batch_log if @request.request_method == "POST" && @request.path.start_with?("/queue-ops/batches/") && @request.path.end_with?("/retry")
         return render_vendor_invoice if @request.request_method == "GET" && @request.path.start_with?("/vendors/")
+
+        method = @request.request_method
+        path = @request.path
+
+        return handle_automation_toggle if method == "POST" && path.match?(%r{\A/automations/\d+/toggle\z})
+        return handle_automation_delete if method == "POST" && path.match?(%r{\A/automations/\d+/delete\z})
+        return render_automation_edit if method == "GET" && path.match?(%r{\A/automations/\d+/edit\z})
+        return handle_automation_update if method == "POST" && path.match?(%r{\A/automations/\d+\z})
+        return api_toggle_automation if method == "POST" && path.match?(%r{\A/api/automations/\d+/toggle\z})
+
+        return handle_delivery_retry if method == "POST" && path.match?(%r{\A/delivery-log/.+/retry\z})
+        return handle_delivery_resend if method == "POST" && path.match?(%r{\A/delivery-log/.+/resend\z})
+        return api_retry_delivery if method == "POST" && path.match?(%r{\A/api/delivery-log/.+/retry\z})
+
+        return download_public_invoice_pdf if method == "GET" && path.match?(%r{\A/invoice-links/.+\.pdf\z})
+        return render_public_invoice if method == "GET" && path.match?(%r{\A/invoice-links/.+\z})
 
         raise NotFoundError
       end
@@ -367,6 +413,9 @@ module SendInvoice
         { "status" => status, "count" => records.length }
       end.sort_by { |item| -item["count"] }
 
+      automation_rules = @store.list_invoice_automation_rules(shop["shop_domain"])
+      delivery_summary = @store.invoice_delivery_counts_since(shop["shop_domain"], (Time.now.utc - (7 * 86_400)).iso8601)
+
       render_page("pages/dashboard", {
         page_title: "Dashboard",
         current_path: @request.path,
@@ -375,8 +424,27 @@ module SendInvoice
         stats: stats,
         daily_points: daily_points,
         status_points: status_points,
-        max_daily_revenue: [daily_points.map { |point| point["revenue"] }.max.to_f, 1].max
+        max_daily_revenue: [daily_points.map { |point| point["revenue"] }.max.to_f, 1].max,
+        automation_enabled: @config.invoice_automation_enabled?,
+        automation_active_rules: automation_rules.count { |rule| rule["enabled"] },
+        automation_overdue: overdue_unpaid_count(orders),
+        automation_delivery_summary: delivery_summary
       })
+    end
+
+    def overdue_unpaid_count(orders)
+      now = Time.now.utc
+      orders.count do |order|
+        next false if order["fully_paid"]
+        next false if %w[paid partially_paid refunded voided].include?(order["financial_status"].to_s.downcase)
+
+        created = begin
+          Time.parse(order["created_at"].to_s).utc
+        rescue ArgumentError
+          nil
+        end
+        created && (created + (7 * 86_400)) < now
+      end
     end
 
     def render_orders
@@ -525,6 +593,265 @@ module SendInvoice
       end
 
       redirect_to(order_detail_path(order["id"], shop["shop_domain"]))
+    end
+
+    # --- Invoice automations --------------------------------------------------
+
+    def render_automations_index
+      shop = require_onboarded_shop
+      rules = @store.list_invoice_automation_rules(shop["shop_domain"])
+      summary = @store.invoice_delivery_counts_since(shop["shop_domain"], (Time.now.utc - (7 * 86_400)).iso8601)
+
+      render_page("pages/automations", {
+        page_title: "Invoice Automations",
+        current_path: "/automations",
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        rules: rules,
+        automation_enabled: @config.invoice_automation_enabled?,
+        active_rules_count: rules.count { |rule| rule["enabled"] },
+        delivery_summary: summary,
+        automation_triggers: AUTOMATION_TRIGGERS
+      })
+    end
+
+    def render_automation_new
+      shop = require_onboarded_shop
+      render_automation_form(shop, blank_automation_rule, mode: "new")
+    end
+
+    def render_automation_edit
+      shop = require_onboarded_shop
+      rule = @store.find_invoice_automation_rule(shop["shop_domain"], automation_id_from_path)
+      raise NotFoundError unless rule
+
+      render_automation_form(shop, rule, mode: "edit")
+    end
+
+    def handle_automation_create
+      shop = require_onboarded_shop
+      attrs = automation_attrs_from_params
+      error = validate_automation_attrs(attrs)
+      if error
+        return render_automation_form(shop, rule_from_attrs(attrs), mode: "new", error: error, status: 422)
+      end
+
+      @store.create_invoice_automation_rule(
+        shop_domain: shop["shop_domain"],
+        name: attrs[:name],
+        trigger_event: attrs[:trigger_event],
+        enabled: attrs[:enabled],
+        conditions: attrs[:conditions],
+        action: attrs[:action],
+        reminder_schedule: attrs[:reminder_schedule]
+      )
+      flash!("info", "Automation created.")
+      redirect_to(query_path("/automations", { "shop" => shop["shop_domain"] }))
+    end
+
+    def handle_automation_update
+      shop = require_onboarded_shop
+      id = automation_id_from_path
+      existing = @store.find_invoice_automation_rule(shop["shop_domain"], id)
+      raise NotFoundError unless existing
+
+      attrs = automation_attrs_from_params
+      error = validate_automation_attrs(attrs)
+      if error
+        return render_automation_form(shop, rule_from_attrs(attrs, id: id), mode: "edit", error: error, status: 422)
+      end
+
+      @store.update_invoice_automation_rule(shop_domain: shop["shop_domain"], id: id, attrs: attrs)
+      flash!("info", "Automation updated.")
+      redirect_to(query_path("/automations", { "shop" => shop["shop_domain"] }))
+    end
+
+    def handle_automation_toggle
+      shop = require_onboarded_shop
+      id = automation_id_from_path
+      rule = @store.find_invoice_automation_rule(shop["shop_domain"], id)
+      raise NotFoundError unless rule
+
+      @store.toggle_invoice_automation_rule(shop_domain: shop["shop_domain"], id: id, enabled: !rule["enabled"])
+      flash!("info", rule["enabled"] ? "Automation disabled." : "Automation enabled.")
+      redirect_to(back_path(query_path("/automations", { "shop" => shop["shop_domain"] })))
+    end
+
+    def handle_automation_delete
+      shop = require_onboarded_shop
+      @store.delete_invoice_automation_rule(shop_domain: shop["shop_domain"], id: automation_id_from_path)
+      flash!("info", "Automation deleted.")
+      redirect_to(query_path("/automations", { "shop" => shop["shop_domain"] }))
+    end
+
+    # --- Delivery log ---------------------------------------------------------
+
+    def render_delivery_log
+      shop = require_onboarded_shop
+      status = present_param("status")
+      query = present_param("search")
+      page = single_value(params["page"]).to_i
+      result = @store.list_invoice_deliveries(
+        shop["shop_domain"],
+        status: status,
+        query: query,
+        page: page <= 0 ? 1 : page,
+        per_page: 25
+      )
+
+      render_page("pages/delivery_log", {
+        page_title: "Delivery Log",
+        current_path: "/delivery-log",
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        delivery_result: result,
+        status_counts: @store.invoice_delivery_status_counts(shop["shop_domain"]),
+        filter_status: status,
+        filter_query: query,
+        delivery_statuses: %w[sent outbox failed pending]
+      })
+    end
+
+    def handle_delivery_retry
+      shop = require_onboarded_shop
+      begin
+        @automation_engine.retry_delivery(delivery_id: delivery_id_from_path, shop_domain: shop["shop_domain"])
+        flash!("info", "Invoice delivery retried.")
+      rescue StandardError => e
+        flash!("error", "Retry failed: #{e.message}")
+      end
+      redirect_to(back_path(query_path("/delivery-log", { "shop" => shop["shop_domain"] })))
+    end
+
+    def handle_delivery_resend
+      shop = require_onboarded_shop
+      delivery = @store.find_invoice_delivery(shop["shop_domain"], delivery_id_from_path)
+      raise NotFoundError unless delivery
+
+      begin
+        @automation_engine.resend_invoice(
+          shop_domain: shop["shop_domain"],
+          order_id: delivery["order_id"],
+          recipient: present_param("recipient_email")
+        )
+        flash!("info", "Invoice resent.")
+      rescue StandardError => e
+        flash!("error", "Resend failed: #{e.message}")
+      end
+      redirect_to(back_path(query_path("/delivery-log", { "shop" => shop["shop_domain"] })))
+    end
+
+    # --- Public secure invoice links ------------------------------------------
+
+    def render_public_invoice
+      link = valid_public_link_for(public_token_from_path)
+      return render_public_invoice_invalid unless link
+
+      shop = @store.shop(link["shop_domain"])
+      order = shop && @store.order(link["shop_domain"], link["order_id"])
+      return render_public_invoice_invalid unless shop && order
+
+      @store.record_invoice_public_link_access(link["id"])
+      document = invoice_document_for(shop, order).payload
+
+      render_page("pages/order_invoice", {
+        page_title: "Invoice #{document['invoice_number']}",
+        current_path: @request.path,
+        shop: nil,
+        invoice_document: document,
+        public_pdf_path: "#{@request.path}.pdf"
+      }, layout: "public_invoice")
+    end
+
+    def download_public_invoice_pdf
+      link = valid_public_link_for(public_token_from_path(strip_pdf: true))
+      raise NotFoundError unless link
+
+      shop = @store.shop(link["shop_domain"])
+      order = shop && @store.order(link["shop_domain"], link["order_id"])
+      raise NotFoundError unless shop && order
+
+      @store.record_invoice_public_link_access(link["id"])
+      builder = invoice_document_for(shop, order)
+      pdf = InvoicePdf.new.generate(builder.payload)
+
+      @response.status = 200
+      @response["Content-Type"] = "application/pdf"
+      @response["Content-Disposition"] = "attachment; filename=\"#{builder.filename}\""
+      @response.body = pdf
+    end
+
+    def render_public_invoice_invalid
+      render_page("pages/public_invoice_invalid", {
+        page_title: "Invoice link unavailable",
+        current_path: @request.path,
+        shop: nil
+      }, status: 404, layout: "public_invoice")
+    end
+
+    # --- Automation JSON API --------------------------------------------------
+
+    def api_list_automations
+      shop = require_onboarded_shop
+      respond_json({ rules: @store.list_invoice_automation_rules(shop["shop_domain"]) })
+    end
+
+    def api_create_automation
+      shop = require_onboarded_shop
+      attrs = automation_attrs_from_request
+      error = validate_automation_attrs(attrs)
+      return respond_json({ error: error }, status: 422) if error
+
+      rule = @store.create_invoice_automation_rule(
+        shop_domain: shop["shop_domain"],
+        name: attrs[:name],
+        trigger_event: attrs[:trigger_event],
+        enabled: attrs[:enabled],
+        conditions: attrs[:conditions],
+        action: attrs[:action],
+        reminder_schedule: attrs[:reminder_schedule]
+      )
+      respond_json({ created: true, rule: rule }, status: 201)
+    end
+
+    def api_toggle_automation
+      shop = require_onboarded_shop
+      id = automation_id_from_path
+      rule = @store.find_invoice_automation_rule(shop["shop_domain"], id)
+      return respond_json({ error: "Automation not found" }, status: 404) unless rule
+
+      updated = @store.toggle_invoice_automation_rule(shop_domain: shop["shop_domain"], id: id, enabled: !rule["enabled"])
+      respond_json({ toggled: true, rule: updated })
+    end
+
+    def api_delivery_log
+      shop = require_onboarded_shop
+      page = single_value(params["page"]).to_i
+      result = @store.list_invoice_deliveries(
+        shop["shop_domain"],
+        status: present_param("status"),
+        query: present_param("search"),
+        page: page <= 0 ? 1 : page,
+        per_page: requested_async_request_limit(default: 25)
+      )
+      respond_json(result)
+    end
+
+    def api_retry_delivery
+      shop = require_onboarded_shop
+      begin
+        delivery = @automation_engine.retry_delivery(delivery_id: delivery_id_from_path, shop_domain: shop["shop_domain"])
+        respond_json({ retried: true, delivery: delivery })
+      rescue StandardError => e
+        respond_json({ error: e.message }, status: 422)
+      end
+    end
+
+    def api_process_due_automations
+      authorize_sync_secret!
+      limit = single_value(params["limit"]).to_i
+      processed = @automation_engine.process_due_events(limit: limit.positive? ? limit : nil)
+      respond_json({ processed: processed })
     end
 
     def render_queue_ops
@@ -1445,35 +1772,6 @@ module SendInvoice
       (((Math.sin(seed) * 10_000) - (Math.sin(seed) * 10_000).floor) * 200 * 100).round / 100.0
     end
 
-    def merged_invoice_config(shop)
-      normalize_invoice_config(
-        deep_merge(MockData::DEFAULT_INVOICE_TEMPLATE_CONFIG, shop["invoice_template_config"] || {})
-      )
-    end
-
-    def merged_notification_config(shop)
-      deep_merge(MockData::DEFAULT_NOTIFICATION_CONFIG, shop["notification_config"] || {})
-    end
-
-    def invoice_document_for(shop, order)
-      InvoiceDocument.new(
-        shop: shop,
-        order: order,
-        invoice_config: merged_invoice_config(shop)
-      )
-    end
-
-    def invoice_delivery_draft_for(shop, order)
-      notification_config = merged_notification_config(shop)
-      email_config = notification_config["email"] || {}
-      document = invoice_document_for(shop, order)
-      {
-        "recipient_email" => order["customer_email"].to_s,
-        "subject" => document.render_template(email_config["subject"].to_s),
-        "body_text" => document.render_template(email_config["body"].to_s)
-      }
-    end
-
     def invoice_delivery_mode_label
       @config.smtp_configured? ? "smtp" : "local_outbox"
     end
@@ -1498,52 +1796,164 @@ module SendInvoice
       %w[company shop_name name customer_name recipient_email invoice_number invoice_date due_date order_name invoice_total payment_terms]
     end
 
-    def deep_merge(base, override)
-      merged = Marshal.load(Marshal.dump(base))
-      override.each do |key, value|
-        if merged[key].is_a?(Hash) && value.is_a?(Hash)
-          merged[key] = deep_merge(merged[key], value)
-        else
-          merged[key] = value
-        end
-      end
-      merged
+    def render_automation_form(shop, rule, mode:, error: nil, status: 200)
+      render_page("pages/automation_form", {
+        page_title: mode == "edit" ? "Edit automation" : "New automation",
+        current_path: "/automations",
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        rule: rule,
+        form_mode: mode,
+        form_error: error,
+        automation_triggers: AUTOMATION_TRIGGERS,
+        form_action: mode == "edit" ? query_path("/automations/#{rule['id']}", { "shop" => shop["shop_domain"] }) : query_path("/automations", { "shop" => shop["shop_domain"] })
+      }, status: status)
     end
 
-    def normalize_invoice_config(config)
-      defaults = MockData::DEFAULT_INVOICE_TEMPLATE_CONFIG
-      normalized = deep_merge(defaults, config || {})
-
-      %w[
-        template currency_symbol accent_color surface_tone font_family density
-        header_align logo_text company_name tagline address phone email website gst
-        bill_to client_address client_email invoice_number invoice_date due_date
-        payment_terms notes bank_details terms
-      ].each do |key|
-        value = normalized[key].to_s
-        normalized[key] = value.strip.empty? ? defaults[key] : value
-      end
-
-      visible_defaults = defaults["visible_fields"] || {}
-      visible_fields = normalized["visible_fields"].is_a?(Hash) ? normalized["visible_fields"] : {}
-      normalized["visible_fields"] = visible_defaults.each_with_object({}) do |(field, default_value), memo|
-        memo[field] = visible_fields.key?(field) ? !!visible_fields[field] : default_value
-      end
-
-      normalized["line_items"] = Array(normalized["line_items"]).map do |line_item|
-        next unless line_item.is_a?(Hash)
-
-        {
-          "desc" => line_item["desc"].to_s,
-          "qty" => line_item["qty"].to_f,
-          "rate" => line_item["rate"].to_f,
-          "discount" => line_item["discount"].to_f,
-          "tax" => line_item["tax"].to_f
+    def blank_automation_rule
+      {
+        "id" => nil,
+        "name" => "",
+        "enabled" => true,
+        "trigger_event" => "order_paid",
+        "conditions" => {
+          "require_customer_email" => true,
+          "financial_status" => [],
+          "fulfillment_status" => [],
+          "include_tags" => [],
+          "exclude_tags" => [],
+          "min_total" => nil,
+          "max_total" => nil
+        },
+        "action" => {
+          "channel" => "email",
+          "attach_pdf" => true,
+          "include_invoice_link" => true,
+          "subject" => "",
+          "body" => ""
+        },
+        "reminder_schedule" => {
+          "days_after_order" => [3, 7, 14],
+          "stop_after_paid" => true,
+          "max_reminders" => 3
         }
-      end.compact
+      }
+    end
 
-      normalized["line_items"] = defaults["line_items"] if normalized["line_items"].empty?
-      normalized
+    def automation_attrs_from_params
+      {
+        name: single_value(params["name"]).to_s.strip,
+        trigger_event: single_value(params["trigger_event"]).to_s.strip,
+        enabled: checkbox_on?(params["enabled"]),
+        conditions: {
+          "require_customer_email" => checkbox_on?(params["require_customer_email"]),
+          "financial_status" => split_list(params["financial_status"]),
+          "fulfillment_status" => split_list(params["fulfillment_status"]),
+          "include_tags" => split_list(params["include_tags"]),
+          "exclude_tags" => split_list(params["exclude_tags"]),
+          "min_total" => number_or_nil(params["min_total"]),
+          "max_total" => number_or_nil(params["max_total"])
+        },
+        action: {
+          "channel" => "email",
+          "attach_pdf" => checkbox_on?(params["attach_pdf"]),
+          "include_invoice_link" => checkbox_on?(params["include_invoice_link"]),
+          "subject" => single_value(params["subject"]).to_s,
+          "body" => single_value(params["body"]).to_s
+        },
+        reminder_schedule: {
+          "days_after_order" => split_list(params["reminder_days"]).map(&:to_i).select(&:positive?).uniq,
+          "stop_after_paid" => checkbox_on?(params["stop_after_paid"]),
+          "max_reminders" => single_value(params["max_reminders"]).to_i
+        }
+      }
+    end
+
+    def automation_attrs_from_request
+      payload = request_payload
+      {
+        name: payload["name"].to_s.strip,
+        trigger_event: payload["trigger_event"].to_s.strip,
+        enabled: payload.key?("enabled") ? !!payload["enabled"] : true,
+        conditions: payload["conditions"].is_a?(Hash) ? payload["conditions"] : {},
+        action: payload["action"].is_a?(Hash) ? payload["action"] : {},
+        reminder_schedule: payload["reminder_schedule"].is_a?(Hash) ? payload["reminder_schedule"] : {}
+      }
+    end
+
+    def rule_from_attrs(attrs, id: nil)
+      {
+        "id" => id,
+        "name" => attrs[:name],
+        "enabled" => attrs[:enabled],
+        "trigger_event" => attrs[:trigger_event],
+        "conditions" => attrs[:conditions],
+        "action" => attrs[:action],
+        "reminder_schedule" => attrs[:reminder_schedule]
+      }
+    end
+
+    def validate_automation_attrs(attrs)
+      return "Name is required." if attrs[:name].to_s.strip.empty?
+      return "Choose a valid trigger event." unless Store::ALLOWED_AUTOMATION_TRIGGERS.include?(attrs[:trigger_event])
+
+      if attrs[:trigger_event] == "payment_reminder_due" && Array(attrs.dig(:reminder_schedule, "days_after_order")).empty?
+        return "Add at least one reminder day (for example 3, 7, 14)."
+      end
+
+      nil
+    end
+
+    def automation_id_from_path
+      @request.path.to_s[%r{\A/(?:api/)?automations/(\d+)}, 1].to_i
+    end
+
+    def delivery_id_from_path
+      segments = @request.path.to_s.split("/")
+      index = segments.index("delivery-log")
+      index ? segments[index + 1] : nil
+    end
+
+    def public_token_from_path(strip_pdf: false)
+      token = @request.path.to_s.sub(%r{\A/invoice-links/}, "")
+      token = token.sub(/\.pdf\z/, "") if strip_pdf
+      token
+    end
+
+    def valid_public_link_for(token)
+      return nil if token.to_s.strip.empty?
+
+      link = @store.find_invoice_public_link_by_token_hash(Digest::SHA256.hexdigest(token))
+      return nil unless link
+      return nil if link["revoked_at"]
+
+      if link["expires_at"]
+        begin
+          return nil if Time.iso8601(link["expires_at"]) < Time.now.utc
+        rescue ArgumentError
+          return nil
+        end
+      end
+
+      link
+    end
+
+    def present_param(name)
+      value = single_value(params[name]).to_s.strip
+      value.empty? ? nil : value
+    end
+
+    def checkbox_on?(value)
+      single_value(value).to_s == "1"
+    end
+
+    def split_list(value)
+      single_value(value).to_s.split(",").map(&:strip).reject(&:empty?)
+    end
+
+    def number_or_nil(value)
+      str = single_value(value).to_s.strip
+      str.empty? ? nil : str.to_f
     end
 
     def plan_definitions

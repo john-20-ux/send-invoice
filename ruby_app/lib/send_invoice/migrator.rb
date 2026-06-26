@@ -235,11 +235,101 @@ module SendInvoice
           WHERE status IN ('queued', 'claimed', 'dispatched', 'running')
         SQL
 
+        run_invoice_automation_migrations(db)
+
         normalize_shop_domain_storage(db)
       end
     end
 
     private
+
+    # Invoice automation, payment reminders, secure public links, and delivery-log
+    # filtering. Kept SQLite-safe and additive so existing shop data is preserved.
+    def run_invoice_automation_migrations(db)
+      db.execute_batch(<<~SQL)
+        CREATE TABLE IF NOT EXISTS invoice_automation_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          shop_domain TEXT NOT NULL,
+          name TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          trigger_event TEXT NOT NULL,
+          conditions_json TEXT NOT NULL DEFAULT '{}',
+          action_json TEXT NOT NULL DEFAULT '{}',
+          reminder_schedule_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_invoice_automation_rules_shop
+          ON invoice_automation_rules (shop_domain);
+        CREATE INDEX IF NOT EXISTS idx_invoice_automation_rules_shop_enabled_trigger
+          ON invoice_automation_rules (shop_domain, enabled, trigger_event);
+
+        CREATE TABLE IF NOT EXISTS invoice_automation_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          shop_domain TEXT NOT NULL,
+          order_id TEXT NOT NULL,
+          rule_id INTEGER,
+          event_type TEXT NOT NULL,
+          event_key TEXT NOT NULL,
+          stage TEXT,
+          source TEXT NOT NULL DEFAULT 'system',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'queued',
+          run_after TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 3,
+          locked_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(rule_id) REFERENCES invoice_automation_rules(id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_automation_events_event_key
+          ON invoice_automation_events (event_key);
+        CREATE INDEX IF NOT EXISTS idx_invoice_automation_events_due
+          ON invoice_automation_events (status, run_after);
+        CREATE INDEX IF NOT EXISTS idx_invoice_automation_events_shop_order
+          ON invoice_automation_events (shop_domain, order_id);
+
+        CREATE TABLE IF NOT EXISTS invoice_public_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          shop_domain TEXT NOT NULL,
+          order_id TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          purpose TEXT NOT NULL DEFAULT 'invoice_download',
+          expires_at TEXT,
+          revoked_at TEXT,
+          access_count INTEGER NOT NULL DEFAULT 0,
+          last_accessed_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_public_links_token_hash
+          ON invoice_public_links (token_hash);
+        CREATE INDEX IF NOT EXISTS idx_invoice_public_links_shop_order
+          ON invoice_public_links (shop_domain, order_id);
+      SQL
+
+      # invoice_deliveries already ships with id/sent_at/error_message/delivery_status;
+      # only add the automation + log-filtering columns it is missing.
+      ensure_column(db, "invoice_deliveries", "automation_rule_id", "INTEGER")
+      ensure_column(db, "invoice_deliveries", "automation_event_id", "INTEGER")
+      ensure_column(db, "invoice_deliveries", "delivery_stage", "TEXT")
+      ensure_column(db, "invoice_deliveries", "idempotency_key", "TEXT")
+      ensure_column(db, "invoice_deliveries", "delivery_source", "TEXT")
+      ensure_column(db, "invoice_deliveries", "retry_of_delivery_id", "TEXT")
+
+      db.execute("CREATE INDEX IF NOT EXISTS idx_invoice_deliveries_shop_created ON invoice_deliveries (shop_domain, created_at)")
+      db.execute("CREATE INDEX IF NOT EXISTS idx_invoice_deliveries_shop_status ON invoice_deliveries (shop_domain, delivery_status)")
+      db.execute(<<~SQL)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_deliveries_idempotency_key
+        ON invoice_deliveries (idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+      SQL
+    end
 
     def ensure_column(db, table, column, definition)
       columns = db.execute("PRAGMA table_info(#{table})").map { |row| row["name"] || row[1] }

@@ -1708,7 +1708,299 @@ class SendInvoiceAppTest < Minitest::Test
     clear_shopify_env
   end
 
+  # --- Invoice automation, reminders, delivery log, public links ------------
+
+  def test_automation_rule_can_be_created_listed_toggled_and_deleted
+    app, store, database_path = build_app(onboarded: true, order_count: 3)
+
+    create = perform(app, "POST", "/automations", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "name" => "Auto on paid",
+      "trigger_event" => "order_paid",
+      "enabled" => "1",
+      "attach_pdf" => "1",
+      "include_invoice_link" => "1",
+      "require_customer_email" => "1"
+    })
+    assert_equal 302, create.status
+
+    rule = store.list_invoice_automation_rules(SendInvoice::MockData::DEMO_SHOP_DOMAIN).first
+    refute_nil rule
+    assert_equal "Auto on paid", rule["name"]
+    assert_equal true, rule["enabled"]
+
+    index = perform(app, "GET", "/automations", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+    assert_equal 200, index.status
+    assert_includes index.body, "Auto on paid"
+
+    perform(app, "POST", "/automations/#{rule['id']}/toggle", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+    assert_equal false, store.find_invoice_automation_rule(SendInvoice::MockData::DEMO_SHOP_DOMAIN, rule["id"])["enabled"]
+
+    perform(app, "POST", "/automations/#{rule['id']}/delete", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+    assert_empty store.list_invoice_automation_rules(SendInvoice::MockData::DEMO_SHOP_DOMAIN)
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_automation_create_rejects_missing_name_and_preserves_values
+    app, store, database_path = build_app(onboarded: true, order_count: 2)
+
+    response = perform(app, "POST", "/automations", {
+      "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      "name" => "",
+      "trigger_event" => "order_paid"
+    })
+
+    assert_equal 422, response.status
+    assert_includes response.body, "Name is required."
+    assert_empty store.list_invoice_automation_rules(SendInvoice::MockData::DEMO_SHOP_DOMAIN)
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_order_paid_automation_enqueues_and_sends_invoice_once_to_outbox
+    outbox_path = File.join(Dir.tmpdir, "send_invoice_auto_#{Process.pid}_#{rand(1_000_000)}")
+    ENV["OUTBOX_PATH"] = outbox_path
+    store, engine, database_path, config = build_automation_engine
+    shop_domain = SendInvoice::MockData::DEMO_SHOP_DOMAIN
+
+    store.create_invoice_automation_rule(
+      shop_domain: shop_domain, name: "On paid", trigger_event: "order_paid",
+      action: { "attach_pdf" => true, "include_invoice_link" => true }
+    )
+
+    unpaid = automation_order(shop_domain, "gid://shopify/Order/AUTO-1", paid: false, email: "buyer@example.com")
+    store.upsert_orders([unpaid])
+    paid = unpaid.merge("financial_status" => "PAID", "fully_paid" => true)
+    store.upsert_orders([paid])
+
+    engine.handle_order_event(shop_domain: shop_domain, order: paid, previous_order: unpaid)
+    assert_equal 1, store.due_invoice_automation_events(limit: 10).length
+
+    engine.process_due_events(limit: 10)
+    deliveries = store.list_invoice_deliveries(shop_domain)["deliveries"]
+    assert_equal 1, deliveries.length
+    assert_equal "automation", deliveries.first["delivery_source"]
+    assert_equal "outbox", deliveries.first["delivery_status"]
+    assert File.exist?(deliveries.first["outbox_path"])
+
+    # Re-processing the same paid order must not duplicate the send.
+    engine.handle_order_event(shop_domain: shop_domain, order: paid, previous_order: paid)
+    engine.process_due_events(limit: 10)
+    assert_equal 1, store.list_invoice_deliveries(shop_domain)["total"]
+  ensure
+    FileUtils.rm_rf(outbox_path) if outbox_path
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_payment_reminder_is_skipped_when_order_is_already_paid
+    outbox_path = File.join(Dir.tmpdir, "send_invoice_rem_#{Process.pid}_#{rand(1_000_000)}")
+    ENV["OUTBOX_PATH"] = outbox_path
+    store, engine, database_path, config = build_automation_engine
+    shop_domain = SendInvoice::MockData::DEMO_SHOP_DOMAIN
+
+    store.create_invoice_automation_rule(
+      shop_domain: shop_domain, name: "Remind", trigger_event: "payment_reminder_due",
+      reminder_schedule: { "days_after_order" => [3], "max_reminders" => 1 }
+    )
+
+    order = automation_order(shop_domain, "gid://shopify/Order/REM-1", paid: false, email: "late@example.com",
+                             created_at: (Time.now.utc - (10 * 86_400)).iso8601)
+    store.upsert_orders([order])
+    engine.handle_order_event(shop_domain: shop_domain, order: order, previous_order: nil)
+
+    reminder_event = store.due_invoice_automation_events(limit: 10).find { |event| event["event_type"] == "payment_reminder_due" }
+    refute_nil reminder_event
+
+    # Order is paid before the reminder runs.
+    store.upsert_orders([order.merge("financial_status" => "PAID", "fully_paid" => true)])
+    engine.process_due_events(limit: 10)
+
+    assert_equal "skipped", store.find_invoice_automation_event(reminder_event["id"])["status"]
+    assert_empty store.list_invoice_deliveries(shop_domain)["deliveries"]
+  ensure
+    FileUtils.rm_rf(outbox_path) if outbox_path
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_failed_delivery_can_be_retried_from_delivery_log
+    outbox_path = File.join(Dir.tmpdir, "send_invoice_retry_#{Process.pid}_#{rand(1_000_000)}")
+    ENV["OUTBOX_PATH"] = outbox_path
+    app, store, database_path = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+    failed = store.create_invoice_delivery(SendInvoice::MockData::DEMO_SHOP_DOMAIN, order["id"], {
+      "recipient_email" => "buyer@example.com",
+      "subject" => "Invoice",
+      "body_text" => "body",
+      "invoice_filename" => "invoice.pdf",
+      "delivery_status" => "failed",
+      "delivery_channel" => "smtp",
+      "delivery_source" => "automation",
+      "error_message" => "smtp timeout"
+    })
+
+    response = perform(app, "POST", "/delivery-log/#{failed['id']}/retry", { "shop" => SendInvoice::MockData::DEMO_SHOP_DOMAIN })
+    assert_equal 302, response.status
+
+    deliveries = store.list_invoice_deliveries(SendInvoice::MockData::DEMO_SHOP_DOMAIN)["deliveries"]
+    retried = deliveries.find { |delivery| delivery["delivery_source"] == "retry" }
+    refute_nil retried
+    assert_equal failed["id"], retried["retry_of_delivery_id"]
+    assert_equal "outbox", retried["delivery_status"]
+  ensure
+    FileUtils.rm_rf(outbox_path) if outbox_path
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_public_invoice_link_renders_for_valid_token_and_404s_for_invalid
+    app, store, database_path = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+    token = "valid-token-example"
+    store.create_invoice_public_link(
+      shop_domain: SendInvoice::MockData::DEMO_SHOP_DOMAIN,
+      order_id: order["id"],
+      token_hash: Digest::SHA256.hexdigest(token),
+      expires_at: (Time.now.utc + 86_400).iso8601
+    )
+
+    valid = perform(app, "GET", "/invoice-links/#{token}")
+    assert_equal 200, valid.status
+    assert_includes valid.body, "template-preview"
+    assert_includes valid.body, "Download PDF"
+    assert_equal 1, store.find_invoice_public_link_by_token_hash(Digest::SHA256.hexdigest(token))["access_count"]
+
+    pdf = perform(app, "GET", "/invoice-links/#{token}.pdf")
+    assert_equal 200, pdf.status
+    assert_equal "application/pdf", pdf["Content-Type"]
+    assert_match(/\A%PDF-1\.\d/, pdf.body)
+
+    invalid = perform(app, "GET", "/invoice-links/not-a-real-token")
+    assert_equal 404, invalid.status
+    assert_includes invalid.body, "not available"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_public_invoice_link_rejected_when_expired_or_revoked
+    app, store, database_path = build_app(onboarded: true, order_count: 2)
+    order = store.orders(SendInvoice::MockData::DEMO_SHOP_DOMAIN, limit: 1)["orders"].first
+
+    expired_token = "expired-token"
+    store.create_invoice_public_link(
+      shop_domain: SendInvoice::MockData::DEMO_SHOP_DOMAIN, order_id: order["id"],
+      token_hash: Digest::SHA256.hexdigest(expired_token), expires_at: (Time.now.utc - 60).iso8601
+    )
+    assert_equal 404, perform(app, "GET", "/invoice-links/#{expired_token}").status
+
+    revoked_token = "revoked-token"
+    link = store.create_invoice_public_link(
+      shop_domain: SendInvoice::MockData::DEMO_SHOP_DOMAIN, order_id: order["id"],
+      token_hash: Digest::SHA256.hexdigest(revoked_token), expires_at: (Time.now.utc + 86_400).iso8601
+    )
+    store.revoke_invoice_public_link(shop_domain: SendInvoice::MockData::DEMO_SHOP_DOMAIN, id: link["id"])
+    assert_equal 404, perform(app, "GET", "/invoice-links/#{revoked_token}").status
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_process_due_automations_api_requires_secret_then_processes
+    store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new)
+    ENV["SYNC_API_SECRET"] = "automation-secret"
+    config = SendInvoice::Configuration.load(root: File.expand_path("../..", __dir__))
+    engine = SendInvoice::InvoiceAutomationEngine.new(config: config, store: store)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client, automation_engine: engine)
+
+    unauthorized = perform(app, "POST", "/api/automations/process-due", {}, [], "", { "content-type" => "application/json" })
+    assert_equal 401, unauthorized.status
+
+    authorized = perform(app, "POST", "/api/automations/process-due", {}, [], "", {
+      "content-type" => "application/json",
+      "x-sync-secret" => "automation-secret"
+    })
+    assert_equal 200, authorized.status
+    assert_equal 0, JSON.parse(authorized.body)["processed"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    ENV.delete("SYNC_API_SECRET")
+    clear_shopify_env
+  end
+
+  def test_shop_data_deletion_removes_automation_rules_and_links
+    store, sync_engine, _shopify_client, database_path = build_real_sync_engine(FakeBulkShopifyClient.new)
+    shop_domain = "sync-test.myshopify.com"
+    store.create_invoice_automation_rule(shop_domain: shop_domain, name: "R", trigger_event: "order_paid")
+    store.create_invoice_public_link(shop_domain: shop_domain, order_id: "gid://shopify/Order/1", token_hash: "hash-1")
+    store.update_shop(shop_domain, "installed_at" => (Time.now.utc - (100 * 86_400)).iso8601)
+
+    uninstalled = sync_engine.mark_shop_uninstalled(shop_domain)
+    sync_engine.cleanup_uninstalled_shop_data(reference_time: Time.parse(uninstalled["scheduled_for_deletion_at"]) + 1)
+
+    assert_empty store.list_invoice_automation_rules(shop_domain)
+    assert_nil store.find_invoice_public_link_by_token_hash("hash-1")
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_sync_engine_enqueues_automation_event_when_order_becomes_paid
+    store, sync_engine, shopify_client, database_path, config = build_real_sync_engine(FakeShopifyClient.new)
+    engine = SendInvoice::InvoiceAutomationEngine.new(config: config, store: store)
+    sync_engine = SendInvoice::SyncEngine.new(config: config, store: store, shopify_client: shopify_client, automation_engine: engine)
+    shop = store.shop("sync-test.myshopify.com")
+    store.create_invoice_automation_rule(shop_domain: shop["shop_domain"], name: "On paid", trigger_event: "order_paid")
+
+    # FakeShopifyClient returns PAID orders #1001/#1002 that do not exist locally yet.
+    result = sync_engine.trigger(shop: shop, type: "full")
+    assert_equal true, result["started"]
+    wait_for_sync(store, shop["shop_domain"])
+
+    events = store.due_invoice_automation_events(limit: 20)
+    assert events.any? { |event| event["event_type"] == "order_paid" }
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
   private
+
+  def build_automation_engine
+    database_path = File.join(Dir.tmpdir, "send_invoice_auto_engine_#{Process.pid}_#{rand(1_000_000)}.sqlite3")
+    root = File.expand_path("../..", __dir__)
+    ENV["DATABASE_PATH"] = database_path
+    ENV.delete("SHOPIFY_API_KEY")
+    ENV.delete("SHOPIFY_API_SECRET")
+    ENV["MOCK_MODE"] = "true"
+    ENV.delete("BACKGROUND_BACKEND")
+
+    config = SendInvoice::Configuration.load(root: root)
+    database = SendInvoice::Database.new(config)
+    SendInvoice::Migrator.new(database).run
+    store = SendInvoice::Store.new(database)
+    store.ensure_shop(SendInvoice::MockData::DEMO_SHOP_DOMAIN, { "shop_name" => SendInvoice::MockData::DEMO_SHOP_NAME, "onboarded" => true })
+    engine = SendInvoice::InvoiceAutomationEngine.new(config: config, store: store)
+
+    [store, engine, database_path, config]
+  end
+
+  def automation_order(shop_domain, id, paid:, email:, created_at: nil)
+    SendInvoice::MockData.orders.first.merge(
+      "id" => id,
+      "shop_domain" => shop_domain,
+      "financial_status" => paid ? "PAID" : "PENDING",
+      "fully_paid" => paid,
+      "customer_email" => email,
+      "created_at" => created_at || Time.now.utc.iso8601,
+      "updated_at" => Time.now.utc.iso8601,
+      "synced_at" => Time.now.utc.iso8601
+    )
+  end
 
   class FakeShopifyClient
     attr_reader :calls

@@ -379,6 +379,59 @@ Bulk job state is available at:
 GET /api/sync/bulk/status
 ```
 
+## Invoice Automations, Payment Reminders, and Delivery Log
+
+The app can automatically send branded invoices and payment reminders, then
+surface every send attempt in a merchant-facing Delivery Log.
+
+- **Automations** (`/automations`): merchant-defined rules that send an invoice
+  when an order is `order_created`, `order_paid`, or `order_fulfilled`. Each rule
+  has match conditions (financial/fulfillment status, include/exclude tags,
+  min/max total, require customer email) and an action (attach PDF, include a
+  secure invoice link, custom subject/body).
+- **Payment reminders**: a `payment_reminder_due` rule schedules reminders N days
+  after order creation (e.g. `3, 7, 14`). Reminders are skipped if the order is
+  already paid and cancelled automatically when an order transitions to paid.
+- **Delivery Log** (`/delivery-log`): lists every manual, automated, and reminder
+  delivery with status, recipient, type, subject, PDF size, and error. Merchants
+  can filter by status, search by order/customer/email, retry failed sends, and
+  resend an invoice.
+- **Secure invoice links**: email templates may include `{{invoice_link}}`, a
+  public read-only URL (`/invoice-links/:token` and `.pdf`). Tokens are stored
+  only as SHA-256 hashes, expire after `INVOICE_PUBLIC_LINK_TTL_DAYS`, and are
+  revocable.
+
+### How it works
+
+- The sync engine detects create/paid/fulfilled transitions and enqueues work in
+  `invoice_automation_events` (keyed by `event_key` for idempotency).
+- An in-process dispatcher (`InvoiceAutomationEngine#process_due_events`) sends
+  due events using the existing `InvoiceDocument`, `InvoicePdf`, and
+  `InvoiceMailer` flow, recording results in `invoice_deliveries` with an
+  idempotency key so repeated webhooks/syncs never double-send.
+- Failed events retry with backoff (5 min, then 30 min, then `dead`).
+
+### Configuration
+
+```text
+INVOICE_AUTOMATION_ENABLED=true
+INVOICE_AUTOMATION_POLL_INTERVAL_SECONDS=60
+INVOICE_AUTOMATION_BATCH_SIZE=25
+INVOICE_PUBLIC_LINK_TTL_DAYS=90
+```
+
+When the app runs with `BACKGROUND_BACKEND=db_queue` (or any time you want an
+external scheduler to drive sending), process due automation work via:
+
+```bash
+curl -X POST https://your-public-app-host/api/automations/process-due \
+  -H "X-Sync-Secret: replace-with-a-long-random-secret"
+```
+
+New tables: `invoice_automation_rules`, `invoice_automation_events`,
+`invoice_public_links`, plus automation columns on `invoice_deliveries`. All are
+removed with shop data on the uninstall deletion path.
+
 ## Repo Notes
 
 - `app.rb` is the Ruby entrypoint.

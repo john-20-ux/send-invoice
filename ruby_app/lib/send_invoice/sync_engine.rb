@@ -162,10 +162,11 @@ module SendInvoice
       }
     GRAPHQL
 
-    def initialize(config:, store:, shopify_client:)
+    def initialize(config:, store:, shopify_client:, automation_engine: nil)
       @config = config
       @store = store
       @shopify_client = shopify_client
+      @automation_engine = automation_engine
       @rate_limits = {}
       @mutex = Mutex.new
       @scheduler_thread = nil
@@ -546,6 +547,32 @@ module SendInvoice
 
     private
 
+    # Persist a batch of synced orders, then hand the batch to the automation
+    # engine so create/paid/fulfilled transitions can enqueue invoice/reminder
+    # events. Previous status is captured before the upsert for transition
+    # detection. Automation is best-effort and never breaks a sync.
+    def persist_orders(shop_domain, orders)
+      return if orders.empty?
+
+      previous = automation_capable? ? @store.order_status_map(shop_domain, orders.map { |order| order["id"] }) : {}
+      @store.upsert_orders(orders)
+      return unless automation_capable?
+
+      begin
+        @automation_engine.handle_synced_orders(
+          shop_domain: shop_domain,
+          orders: orders,
+          previous_status_map: previous
+        )
+      rescue StandardError => e
+        warn "[send-invoice] automation notify failed for #{shop_domain}: #{e.class}: #{e.message}"
+      end
+    end
+
+    def automation_capable?
+      !@automation_engine.nil? && @config.invoice_automation_enabled?
+    end
+
     def enqueue_sync_request(shop:, type:, skip_rate_limit:)
       shop_domain = shop.fetch("shop_domain")
       dedupe_key = "sync.#{type}:#{shop_domain}"
@@ -923,7 +950,7 @@ module SendInvoice
 
       orders.each_slice(batch_size) do |batch|
         sleep 0.25
-        @store.upsert_orders(batch)
+        persist_orders(shop_domain, batch)
         synced += batch.length
         @store.update_sync_log_progress(sync_log_id, synced, total)
       end
@@ -990,7 +1017,7 @@ module SendInvoice
 
           nodes = nodes.map { |node| complete_order_line_items(shop, node) }
           orders = nodes.map { |node| map_order_node(node, shop.fetch("shop_domain")) }
-          @store.upsert_orders(orders)
+          persist_orders(shop.fetch("shop_domain"), orders)
           highest_order_updated_at = [highest_order_updated_at, max_order_updated_at(orders)].compact.max
           synced += orders.length
           total_estimated = [synced, total_estimated].max
@@ -1019,7 +1046,7 @@ module SendInvoice
       end
 
       unless orders.empty?
-        @store.upsert_orders(orders)
+        persist_orders(shop.fetch("shop_domain"), orders)
         @store.update_sync_log_progress(sync_log_id, orders.length, orders.length)
       end
 
@@ -1169,7 +1196,7 @@ module SendInvoice
         imported += 1
 
         if batch.length >= 250
-          @store.upsert_orders(batch)
+          persist_orders(shop_domain, batch)
           @store.update_sync_log_progress(sync_log_id, imported, imported)
           @store.update_bulk_sync_job(job_id, "imported_count" => imported)
           batch = []
@@ -1199,7 +1226,7 @@ module SendInvoice
 
       flush_order.call
       unless batch.empty?
-        @store.upsert_orders(batch)
+        persist_orders(shop_domain, batch)
         @store.update_sync_log_progress(sync_log_id, imported, imported)
         @store.update_bulk_sync_job(job_id, "imported_count" => imported)
       end

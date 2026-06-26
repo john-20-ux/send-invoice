@@ -127,6 +127,11 @@ module SendInvoice
       shop_domain = normalize_text(shop_domain)
       @database.with_connection do |db|
         db.execute("DELETE FROM sessions WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
+        # These automation tables key off shop_domain without a cascading FK to
+        # shops, so remove them explicitly to honor the uninstall data lifecycle.
+        db.execute("DELETE FROM invoice_automation_events WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
+        db.execute("DELETE FROM invoice_automation_rules WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
+        db.execute("DELETE FROM invoice_public_links WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
         db.execute("DELETE FROM shops WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
       end
 
@@ -635,6 +640,12 @@ module SendInvoice
         "outbox_path" => normalize_text(attributes["outbox_path"] || attributes[:outbox_path]),
         "pdf_size_bytes" => (attributes["pdf_size_bytes"] || attributes[:pdf_size_bytes] || 0).to_i,
         "error_message" => normalize_text(attributes["error_message"] || attributes[:error_message]),
+        "automation_rule_id" => attributes["automation_rule_id"] || attributes[:automation_rule_id],
+        "automation_event_id" => attributes["automation_event_id"] || attributes[:automation_event_id],
+        "delivery_stage" => normalize_text(attributes["delivery_stage"] || attributes[:delivery_stage]),
+        "delivery_source" => normalize_text(attributes["delivery_source"] || attributes[:delivery_source] || "manual"),
+        "idempotency_key" => normalize_text(attributes["idempotency_key"] || attributes[:idempotency_key]),
+        "retry_of_delivery_id" => normalize_text(attributes["retry_of_delivery_id"] || attributes[:retry_of_delivery_id]),
         "created_at" => now,
         "sent_at" => attributes["sent_at"] || attributes[:sent_at],
         "updated_at" => now
@@ -643,7 +654,8 @@ module SendInvoice
         "id", "shop_domain", "order_id", "recipient_email", "subject", "body_text",
         "invoice_filename", "delivery_status", "delivery_channel", "delivery_target",
         "external_message_id", "outbox_path", "pdf_size_bytes", "error_message",
-        "created_at", "sent_at", "updated_at"
+        "automation_rule_id", "automation_event_id", "delivery_stage", "delivery_source",
+        "idempotency_key", "retry_of_delivery_id", "created_at", "sent_at", "updated_at"
       )
 
       @database.with_connection do |db|
@@ -652,12 +664,467 @@ module SendInvoice
             id, shop_domain, order_id, recipient_email, subject, body_text,
             invoice_filename, delivery_status, delivery_channel, delivery_target,
             external_message_id, outbox_path, pdf_size_bytes, error_message,
-            created_at, sent_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            automation_rule_id, automation_event_id, delivery_stage, delivery_source,
+            idempotency_key, retry_of_delivery_id, created_at, sent_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL
       end
 
       invoice_delivery(payload["id"])
+    end
+
+    def successful_invoice_delivery_for_idempotency_key(idempotency_key)
+      return nil if idempotency_key.to_s.empty?
+
+      @database.with_connection do |db|
+        row = db.get_first_row(<<~SQL, [normalize_text(idempotency_key)])
+          SELECT * FROM invoice_deliveries
+          WHERE idempotency_key = ?
+            AND delivery_status IN ('sent', 'outbox')
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1
+        SQL
+        hydrate_invoice_delivery(row)
+      end
+    end
+
+    def update_invoice_delivery(delivery_id, attributes)
+      normalized = normalize_keys(attributes)
+      allowed = %w[
+        delivery_status delivery_channel delivery_target external_message_id
+        outbox_path pdf_size_bytes error_message sent_at
+      ]
+      updates = []
+      values = []
+
+      normalized.each do |key, value|
+        next unless allowed.include?(key)
+
+        updates << "#{key} = ?"
+        values << value
+      end
+
+      return invoice_delivery(delivery_id) if updates.empty?
+
+      updates << "updated_at = ?"
+      values << Time.now.utc.iso8601
+      values << delivery_id
+
+      @database.with_connection do |db|
+        db.execute("UPDATE invoice_deliveries SET #{updates.join(', ')} WHERE id = ?", values)
+      end
+
+      invoice_delivery(delivery_id)
+    end
+
+    def find_invoice_delivery(shop_domain, delivery_id)
+      @database.with_connection do |db|
+        row = db.get_first_row(
+          "SELECT * FROM invoice_deliveries WHERE id = ? AND shop_domain = ?",
+          [delivery_id, normalize_text(shop_domain)]
+        )
+        hydrate_invoice_delivery(row)
+      end
+    end
+
+    # Delivery log listing: joins orders so merchants can search by order
+    # name/customer even though invoice_deliveries only stores the recipient.
+    def list_invoice_deliveries(shop_domain, status: nil, query: nil, page: 1, per_page: 25)
+      shop_domain = normalize_text(shop_domain)
+      page = [page.to_i, 1].max
+      per_page = [[per_page.to_i, 1].max, 100].min
+      clauses = ["d.shop_domain = ?"]
+      values = [shop_domain]
+
+      if present?(status)
+        clauses << "d.delivery_status = ?"
+        values << status.to_s
+      end
+
+      if present?(query)
+        needle = "%#{query.to_s.downcase}%"
+        clauses << "(LOWER(d.order_id) LIKE ? OR LOWER(o.name) LIKE ? OR LOWER(d.recipient_email) LIKE ? " \
+                   "OR LOWER(o.customer_email) LIKE ? OR LOWER(o.customer_first_name) LIKE ? " \
+                   "OR LOWER(o.customer_last_name) LIKE ? OR LOWER(d.subject) LIKE ?)"
+        7.times { values << needle }
+      end
+
+      where = clauses.join(" AND ")
+      offset = (page - 1) * per_page
+
+      @database.with_connection do |db|
+        total = db.get_first_value(
+          "SELECT COUNT(*) FROM invoice_deliveries d LEFT JOIN orders o ON o.id = d.order_id AND o.shop_domain = d.shop_domain WHERE #{where}",
+          values
+        ).to_i
+        rows = db.execute(<<~SQL, values + [per_page, offset])
+          SELECT d.*, o.name AS order_name, o.customer_email AS order_customer_email,
+                 o.customer_first_name AS order_customer_first_name,
+                 o.customer_last_name AS order_customer_last_name
+          FROM invoice_deliveries d
+          LEFT JOIN orders o ON o.id = d.order_id AND o.shop_domain = d.shop_domain
+          WHERE #{where}
+          ORDER BY d.created_at DESC, d.rowid DESC
+          LIMIT ? OFFSET ?
+        SQL
+        {
+          "deliveries" => rows.map { |row| hydrate_invoice_delivery(row).merge(
+            "order_name" => row["order_name"],
+            "order_customer_email" => row["order_customer_email"],
+            "order_customer_name" => [row["order_customer_first_name"], row["order_customer_last_name"]].compact.join(" ").strip
+          ) },
+          "total" => total,
+          "page" => page,
+          "per_page" => per_page,
+          "total_pages" => [(total.to_f / per_page).ceil, 1].max
+        }
+      end
+    end
+
+    def invoice_delivery_status_counts(shop_domain)
+      counts = Hash.new(0)
+      @database.with_connection do |db|
+        db.execute(
+          "SELECT delivery_status, COUNT(*) AS count FROM invoice_deliveries WHERE shop_domain = ? GROUP BY delivery_status",
+          [normalize_text(shop_domain)]
+        ).each { |row| counts[row["delivery_status"]] = row["count"].to_i }
+      end
+      counts
+    end
+
+    def invoice_delivery_counts_since(shop_domain, since_iso)
+      @database.with_connection do |db|
+        row = db.get_first_row(<<~SQL, [normalize_text(shop_domain), since_iso])
+          SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN delivery_status IN ('sent', 'outbox') THEN 1 ELSE 0 END) AS sent
+          FROM invoice_deliveries
+          WHERE shop_domain = ? AND created_at >= ?
+        SQL
+        {
+          "total" => row["total"].to_i,
+          "failed" => row["failed"].to_i,
+          "sent" => row["sent"].to_i
+        }
+      end
+    end
+
+    # Minimal previous-state lookup for transition detection in the sync engine.
+    def order_status_map(shop_domain, order_ids)
+      ids = Array(order_ids).map { |id| normalize_text(id) }.uniq
+      return {} if ids.empty?
+
+      placeholders = (["?"] * ids.length).join(", ")
+      @database.with_connection do |db|
+        rows = db.execute(
+          "SELECT id, financial_status, fulfillment_status, fully_paid FROM orders WHERE shop_domain = ? AND id IN (#{placeholders})",
+          [normalize_text(shop_domain)] + ids
+        )
+        rows.each_with_object({}) do |row, memo|
+          memo[row["id"]] = {
+            "financial_status" => row["financial_status"],
+            "fulfillment_status" => row["fulfillment_status"],
+            "fully_paid" => row["fully_paid"].to_i == 1
+          }
+        end
+      end
+    end
+
+    # --- Invoice automation rules ---------------------------------------------
+
+    ALLOWED_AUTOMATION_TRIGGERS = %w[order_created order_paid order_fulfilled payment_reminder_due].freeze
+
+    def create_invoice_automation_rule(shop_domain:, name:, trigger_event:, enabled: true, conditions: {}, action: {}, reminder_schedule: {})
+      now = Time.now.utc.iso8601
+      values = [
+        normalize_text(shop_domain),
+        normalize_text(name),
+        truthy_db(enabled),
+        normalize_text(trigger_event),
+        JSON.generate(conditions || {}),
+        JSON.generate(action || {}),
+        JSON.generate(reminder_schedule || {}),
+        now,
+        now
+      ]
+
+      id = @database.with_connection do |db|
+        db.execute(<<~SQL, values)
+          INSERT INTO invoice_automation_rules (
+            shop_domain, name, enabled, trigger_event, conditions_json, action_json,
+            reminder_schedule_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SQL
+        db.last_insert_row_id
+      end
+
+      find_invoice_automation_rule(shop_domain, id)
+    end
+
+    def update_invoice_automation_rule(shop_domain:, id:, attrs:)
+      normalized = normalize_keys(attrs)
+      updates = []
+      values = []
+
+      normalized.each do |key, value|
+        case key
+        when "name", "trigger_event"
+          updates << "#{key} = ?"
+          values << normalize_text(value)
+        when "enabled"
+          updates << "enabled = ?"
+          values << truthy_db(value)
+        when "conditions"
+          updates << "conditions_json = ?"
+          values << JSON.generate(value || {})
+        when "action"
+          updates << "action_json = ?"
+          values << JSON.generate(value || {})
+        when "reminder_schedule"
+          updates << "reminder_schedule_json = ?"
+          values << JSON.generate(value || {})
+        end
+      end
+
+      return find_invoice_automation_rule(shop_domain, id) if updates.empty?
+
+      updates << "updated_at = ?"
+      values << Time.now.utc.iso8601
+      values << id
+      values << normalize_text(shop_domain)
+
+      @database.with_connection do |db|
+        db.execute("UPDATE invoice_automation_rules SET #{updates.join(', ')} WHERE id = ? AND shop_domain = ?", values)
+      end
+
+      find_invoice_automation_rule(shop_domain, id)
+    end
+
+    def toggle_invoice_automation_rule(shop_domain:, id:, enabled:)
+      @database.with_connection do |db|
+        db.execute(
+          "UPDATE invoice_automation_rules SET enabled = ?, updated_at = ? WHERE id = ? AND shop_domain = ?",
+          [truthy_db(enabled), Time.now.utc.iso8601, id, normalize_text(shop_domain)]
+        )
+      end
+      find_invoice_automation_rule(shop_domain, id)
+    end
+
+    def delete_invoice_automation_rule(shop_domain:, id:)
+      changed = @database.with_connection do |db|
+        db.execute("DELETE FROM invoice_automation_rules WHERE id = ? AND shop_domain = ?", [id, normalize_text(shop_domain)])
+        db.changes
+      end
+      changed == 1
+    end
+
+    def find_invoice_automation_rule(shop_domain, id)
+      @database.with_connection do |db|
+        row = db.get_first_row(
+          "SELECT * FROM invoice_automation_rules WHERE id = ? AND shop_domain = ?",
+          [id, normalize_text(shop_domain)]
+        )
+        hydrate_invoice_automation_rule(row)
+      end
+    end
+
+    def list_invoice_automation_rules(shop_domain, trigger_event: nil, enabled: nil)
+      clauses = ["shop_domain = ?"]
+      values = [normalize_text(shop_domain)]
+
+      if present?(trigger_event)
+        clauses << "trigger_event = ?"
+        values << trigger_event.to_s
+      end
+
+      unless enabled.nil?
+        clauses << "enabled = ?"
+        values << truthy_db(enabled)
+      end
+
+      @database.with_connection do |db|
+        db.execute(
+          "SELECT * FROM invoice_automation_rules WHERE #{clauses.join(' AND ')} ORDER BY created_at ASC, id ASC",
+          values
+        ).map { |row| hydrate_invoice_automation_rule(row) }
+      end
+    end
+
+    # --- Invoice automation events --------------------------------------------
+
+    def enqueue_invoice_automation_event(shop_domain:, order_id:, rule_id:, event_type:, event_key:, stage: nil, source: "system", payload: {}, run_after: Time.now.utc.iso8601, max_attempts: 3)
+      now = Time.now.utc.iso8601
+      values = [
+        normalize_text(shop_domain),
+        normalize_text(order_id),
+        rule_id,
+        normalize_text(event_type),
+        normalize_text(event_key),
+        normalize_text(stage),
+        normalize_text(source),
+        JSON.generate(payload || {}),
+        "queued",
+        run_after,
+        max_attempts.to_i,
+        now,
+        now
+      ]
+
+      inserted = @database.with_connection do |db|
+        db.execute(<<~SQL, values)
+          INSERT OR IGNORE INTO invoice_automation_events (
+            shop_domain, order_id, rule_id, event_type, event_key, stage, source,
+            payload_json, status, run_after, max_attempts, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SQL
+        db.changes
+      end
+
+      event = find_invoice_automation_event_by_key(event_key)
+      event ? event.merge("created" => inserted == 1) : nil
+    end
+
+    def find_invoice_automation_event(id)
+      @database.with_connection do |db|
+        hydrate_invoice_automation_event(db.get_first_row("SELECT * FROM invoice_automation_events WHERE id = ?", id))
+      end
+    end
+
+    def find_invoice_automation_event_by_key(event_key)
+      @database.with_connection do |db|
+        hydrate_invoice_automation_event(
+          db.get_first_row("SELECT * FROM invoice_automation_events WHERE event_key = ?", normalize_text(event_key))
+        )
+      end
+    end
+
+    def due_invoice_automation_events(now: Time.now.utc.iso8601, limit: 25)
+      @database.with_connection do |db|
+        db.execute(<<~SQL, [now, limit.to_i]).map { |row| hydrate_invoice_automation_event(row) }
+          SELECT * FROM invoice_automation_events
+          WHERE status = 'queued' AND run_after <= ?
+          ORDER BY run_after ASC, id ASC
+          LIMIT ?
+        SQL
+      end
+    end
+
+    # Atomically claim a queued event so only one worker processes it.
+    def lock_invoice_automation_event(id, locked_at: Time.now.utc.iso8601)
+      changed = @database.with_connection do |db|
+        db.execute(<<~SQL, [locked_at, locked_at, id])
+          UPDATE invoice_automation_events
+          SET status = 'running', locked_at = ?, attempts = attempts + 1, updated_at = ?
+          WHERE id = ? AND status = 'queued'
+        SQL
+        db.changes
+      end
+      changed == 1
+    end
+
+    def mark_invoice_automation_event_succeeded(id)
+      update_invoice_automation_event_status(id, "succeeded", last_error: nil)
+    end
+
+    def mark_invoice_automation_event_skipped(id, reason)
+      update_invoice_automation_event_status(id, "skipped", last_error: reason)
+    end
+
+    def mark_invoice_automation_event_cancelled(id, reason)
+      update_invoice_automation_event_status(id, "cancelled", last_error: reason)
+    end
+
+    def mark_invoice_automation_event_dead(id, error)
+      update_invoice_automation_event_status(id, "dead", last_error: error)
+    end
+
+    def mark_invoice_automation_event_failed(id, error:, retry_at: nil)
+      now = Time.now.utc.iso8601
+      @database.with_connection do |db|
+        if retry_at
+          db.execute(<<~SQL, [retry_at, error, now, id])
+            UPDATE invoice_automation_events
+            SET status = 'queued', run_after = ?, locked_at = NULL, last_error = ?, updated_at = ?
+            WHERE id = ?
+          SQL
+        else
+          db.execute(<<~SQL, [error, now, id])
+            UPDATE invoice_automation_events
+            SET status = 'failed', locked_at = NULL, last_error = ?, updated_at = ?
+            WHERE id = ?
+          SQL
+        end
+      end
+      find_invoice_automation_event(id)
+    end
+
+    def cancel_invoice_automation_events_for_order(shop_domain:, order_id:, event_type: nil, reason: "order_paid")
+      clauses = ["shop_domain = ?", "order_id = ?", "status = 'queued'"]
+      values = [normalize_text(shop_domain), normalize_text(order_id)]
+
+      if present?(event_type)
+        clauses << "event_type = ?"
+        values << event_type.to_s
+      end
+
+      now = Time.now.utc.iso8601
+      @database.with_connection do |db|
+        db.execute(
+          "UPDATE invoice_automation_events SET status = 'cancelled', last_error = ?, updated_at = ? WHERE #{clauses.join(' AND ')}",
+          [reason, now] + values
+        )
+        db.changes
+      end
+    end
+
+    # --- Invoice public links -------------------------------------------------
+
+    def create_invoice_public_link(shop_domain:, order_id:, token_hash:, expires_at: nil, purpose: "invoice_download")
+      now = Time.now.utc.iso8601
+      id = @database.with_connection do |db|
+        db.execute(<<~SQL, [normalize_text(shop_domain), normalize_text(order_id), normalize_text(token_hash), normalize_text(purpose), expires_at, now, now])
+          INSERT INTO invoice_public_links (
+            shop_domain, order_id, token_hash, purpose, expires_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        SQL
+        db.last_insert_row_id
+      end
+      find_invoice_public_link(id)
+    end
+
+    def find_invoice_public_link(id)
+      @database.with_connection do |db|
+        hydrate_invoice_public_link(db.get_first_row("SELECT * FROM invoice_public_links WHERE id = ?", id))
+      end
+    end
+
+    def find_invoice_public_link_by_token_hash(token_hash)
+      @database.with_connection do |db|
+        hydrate_invoice_public_link(
+          db.get_first_row("SELECT * FROM invoice_public_links WHERE token_hash = ?", normalize_text(token_hash))
+        )
+      end
+    end
+
+    def record_invoice_public_link_access(id, accessed_at: Time.now.utc.iso8601)
+      @database.with_connection do |db|
+        db.execute(
+          "UPDATE invoice_public_links SET access_count = access_count + 1, last_accessed_at = ?, updated_at = ? WHERE id = ?",
+          [accessed_at, accessed_at, id]
+        )
+      end
+    end
+
+    def revoke_invoice_public_link(shop_domain:, id:, revoked_at: Time.now.utc.iso8601)
+      changed = @database.with_connection do |db|
+        db.execute(
+          "UPDATE invoice_public_links SET revoked_at = ?, updated_at = ? WHERE id = ? AND shop_domain = ? AND revoked_at IS NULL",
+          [revoked_at, revoked_at, id, normalize_text(shop_domain)]
+        )
+        db.changes
+      end
+      changed == 1
     end
 
     def invoice_deliveries(shop_domain, order_id, limit: 20)
@@ -1244,10 +1711,86 @@ module SendInvoice
         "outbox_path" => row["outbox_path"],
         "pdf_size_bytes" => row["pdf_size_bytes"].to_i,
         "error_message" => row["error_message"],
+        "automation_rule_id" => row["automation_rule_id"],
+        "automation_event_id" => row["automation_event_id"],
+        "delivery_stage" => row["delivery_stage"],
+        "delivery_source" => row["delivery_source"],
+        "idempotency_key" => row["idempotency_key"],
+        "retry_of_delivery_id" => row["retry_of_delivery_id"],
         "created_at" => row["created_at"],
         "sent_at" => row["sent_at"],
         "updated_at" => row["updated_at"]
       }
+    end
+
+    def hydrate_invoice_automation_rule(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => normalize_text(row["shop_domain"]),
+        "name" => row["name"],
+        "enabled" => row["enabled"].to_i == 1,
+        "trigger_event" => row["trigger_event"],
+        "conditions" => JSON.parse(row["conditions_json"].to_s.empty? ? "{}" : row["conditions_json"]),
+        "action" => JSON.parse(row["action_json"].to_s.empty? ? "{}" : row["action_json"]),
+        "reminder_schedule" => JSON.parse(row["reminder_schedule_json"].to_s.empty? ? "{}" : row["reminder_schedule_json"]),
+        "created_at" => row["created_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def hydrate_invoice_automation_event(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => normalize_text(row["shop_domain"]),
+        "order_id" => row["order_id"],
+        "rule_id" => row["rule_id"],
+        "event_type" => row["event_type"],
+        "event_key" => row["event_key"],
+        "stage" => row["stage"],
+        "source" => row["source"],
+        "payload" => JSON.parse(row["payload_json"].to_s.empty? ? "{}" : row["payload_json"]),
+        "status" => row["status"],
+        "run_after" => row["run_after"],
+        "attempts" => row["attempts"].to_i,
+        "max_attempts" => row["max_attempts"].to_i,
+        "locked_at" => row["locked_at"],
+        "last_error" => row["last_error"],
+        "created_at" => row["created_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def hydrate_invoice_public_link(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => normalize_text(row["shop_domain"]),
+        "order_id" => row["order_id"],
+        "token_hash" => row["token_hash"],
+        "purpose" => row["purpose"],
+        "expires_at" => row["expires_at"],
+        "revoked_at" => row["revoked_at"],
+        "access_count" => row["access_count"].to_i,
+        "last_accessed_at" => row["last_accessed_at"],
+        "created_at" => row["created_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def update_invoice_automation_event_status(id, status, last_error: nil)
+      now = Time.now.utc.iso8601
+      @database.with_connection do |db|
+        db.execute(
+          "UPDATE invoice_automation_events SET status = ?, last_error = ?, locked_at = NULL, updated_at = ? WHERE id = ?",
+          [status, last_error, now, id]
+        )
+      end
+      find_invoice_automation_event(id)
     end
 
     def hydrate_batch_log(row)

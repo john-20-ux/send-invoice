@@ -1,0 +1,107 @@
+<% conditions = @rule["conditions"] || {} %>
+<% action = @rule["action"] || {} %>
+<% reminder = @rule["reminder_schedule"] || {} %>
+
+<section class="section-card">
+  <p class="eyebrow">Automation</p>
+  <h2><%= @form_mode == "edit" ? "Edit automation" : "New automation" %></h2>
+  <p class="section-note">Choose when invoices send automatically and which orders qualify.</p>
+
+  <% if @form_error %>
+    <div class="flash flash-error"><span><%= h(@form_error) %></span></div>
+  <% end %>
+
+  <form method="post" action="<%= @form_action %>" class="stacked-form" style="margin-top:18px">
+    <div class="field">
+      <label for="name">Rule name</label>
+      <input id="name" name="name" type="text" value="<%= h(@rule["name"]) %>" placeholder="Send invoice when paid">
+    </div>
+
+    <div class="checkbox-row">
+      <input id="enabled" name="enabled" type="checkbox" value="1" <%= @rule["enabled"] ? "checked" : "" %>>
+      <label for="enabled"><strong>Enabled</strong></label>
+    </div>
+
+    <div class="field">
+      <label for="trigger_event">Trigger</label>
+      <select id="trigger_event" name="trigger_event">
+        <% @automation_triggers.each do |trigger| %>
+          <option value="<%= trigger["value"] %>" <%= @rule["trigger_event"] == trigger["value"] ? "selected" : "" %>><%= trigger["label"] %></option>
+        <% end %>
+      </select>
+    </div>
+
+    <p class="eyebrow" style="margin-top:18px">Conditions</p>
+    <div class="checkbox-row">
+      <input id="require_customer_email" name="require_customer_email" type="checkbox" value="1" <%= conditions.fetch("require_customer_email", true) ? "checked" : "" %>>
+      <label for="require_customer_email">Require a customer email</label>
+    </div>
+
+    <div class="grid-two">
+      <div class="field">
+        <label for="financial_status">Financial status (comma separated)</label>
+        <input id="financial_status" name="financial_status" type="text" value="<%= h(Array(conditions["financial_status"]).join(", ")) %>" placeholder="pending, authorized">
+      </div>
+      <div class="field">
+        <label for="fulfillment_status">Fulfillment status (comma separated)</label>
+        <input id="fulfillment_status" name="fulfillment_status" type="text" value="<%= h(Array(conditions["fulfillment_status"]).join(", ")) %>" placeholder="unfulfilled">
+      </div>
+      <div class="field">
+        <label for="include_tags">Include order tags (comma separated)</label>
+        <input id="include_tags" name="include_tags" type="text" value="<%= h(Array(conditions["include_tags"]).join(", ")) %>" placeholder="b2b">
+      </div>
+      <div class="field">
+        <label for="exclude_tags">Exclude order tags (comma separated)</label>
+        <input id="exclude_tags" name="exclude_tags" type="text" value="<%= h(Array(conditions["exclude_tags"]).join(", ")) %>" placeholder="no-invoice">
+      </div>
+      <div class="field">
+        <label for="min_total">Minimum order total</label>
+        <input id="min_total" name="min_total" type="number" step="0.01" min="0" value="<%= conditions["min_total"] %>">
+      </div>
+      <div class="field">
+        <label for="max_total">Maximum order total</label>
+        <input id="max_total" name="max_total" type="number" step="0.01" min="0" value="<%= conditions["max_total"] %>">
+      </div>
+    </div>
+
+    <p class="eyebrow" style="margin-top:18px">Action</p>
+    <div class="checkbox-row">
+      <input id="attach_pdf" name="attach_pdf" type="checkbox" value="1" <%= action.fetch("attach_pdf", true) ? "checked" : "" %>>
+      <label for="attach_pdf">Attach invoice PDF</label>
+    </div>
+    <div class="checkbox-row">
+      <input id="include_invoice_link" name="include_invoice_link" type="checkbox" value="1" <%= action.fetch("include_invoice_link", true) ? "checked" : "" %>>
+      <label for="include_invoice_link">Include secure invoice download link (<code>{{invoice_link}}</code>)</label>
+    </div>
+    <div class="field">
+      <label for="subject">Email subject</label>
+      <input id="subject" name="subject" type="text" value="<%= h(action["subject"]) %>" placeholder="Invoice {{invoice_number}} for order {{order_name}}">
+    </div>
+    <div class="field">
+      <label for="body">Email body</label>
+      <textarea id="body" name="body" rows="6" placeholder="Hi {{customer_name}}, your invoice is attached. Download it here: {{invoice_link}}"><%= h(action["body"]) %></textarea>
+    </div>
+    <p class="muted">Placeholders: <code>{{shop_name}}</code>, <code>{{order_name}}</code>, <code>{{invoice_number}}</code>, <code>{{customer_name}}</code>, <code>{{total_price}}</code>, <code>{{currency}}</code>, <code>{{due_date}}</code>, <code>{{days_overdue}}</code>, <code>{{invoice_link}}</code>.</p>
+
+    <p class="eyebrow" style="margin-top:18px">Reminder schedule (payment reminder trigger only)</p>
+    <div class="grid-two">
+      <div class="field">
+        <label for="reminder_days">Days after order (comma separated)</label>
+        <input id="reminder_days" name="reminder_days" type="text" value="<%= h(Array(reminder["days_after_order"]).join(", ")) %>" placeholder="3, 7, 14">
+      </div>
+      <div class="field">
+        <label for="max_reminders">Max reminders</label>
+        <input id="max_reminders" name="max_reminders" type="number" min="0" value="<%= reminder["max_reminders"] %>">
+      </div>
+    </div>
+    <div class="checkbox-row">
+      <input id="stop_after_paid" name="stop_after_paid" type="checkbox" value="1" <%= reminder.fetch("stop_after_paid", true) ? "checked" : "" %>>
+      <label for="stop_after_paid">Stop reminders once the order is paid</label>
+    </div>
+
+    <div class="button-inline" style="margin-top:20px">
+      <button class="button" type="submit"><%= @form_mode == "edit" ? "Save automation" : "Create automation" %></button>
+      <a class="button-secondary" href="<%= query_path("/automations", { "shop" => @shop["shop_domain"] }) %>">Cancel</a>
+    </div>
+  </form>
+</section>

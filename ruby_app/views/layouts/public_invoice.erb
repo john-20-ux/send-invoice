@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title><%= h(@page_title || "Invoice") %></title>
+    <link rel="stylesheet" href="/assets/app.css">
+  </head>
+  <body class="print-body">
+    <div class="print-toolbar">
+      <% if @public_pdf_path %>
+        <a href="<%= h(@public_pdf_path) %>" class="button">Download PDF</a>
+      <% end %>
+      <button type="button" class="button button-ghost" onclick="window.print()">Print</button>
+    </div>
+    <main class="print-sheet">
+      <%= @content %>
+    </main>
+  </body>
+</html>

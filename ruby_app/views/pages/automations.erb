@@ -1,0 +1,76 @@
+<div class="grid-four">
+  <article class="metric-card">
+    <p class="label">Automation status</p>
+    <p class="value"><%= @automation_enabled ? "On" : "Off" %></p>
+  </article>
+  <article class="metric-card">
+    <p class="label">Active rules</p>
+    <p class="value"><%= @active_rules_count %></p>
+  </article>
+  <article class="metric-card">
+    <p class="label">Sent (7 days)</p>
+    <p class="value"><%= @delivery_summary["sent"] %></p>
+  </article>
+  <article class="metric-card">
+    <p class="label">Failed (7 days)</p>
+    <p class="value"><%= @delivery_summary["failed"] %></p>
+  </article>
+</div>
+
+<section class="section-card">
+  <div class="topbar" style="margin:0 0 8px">
+    <div>
+      <p class="eyebrow">Automations</p>
+      <h2>Invoice automation rules</h2>
+      <p class="section-note">Automatically send branded invoices and payment reminders when orders are created, paid, or fulfilled.</p>
+    </div>
+    <a class="button" href="<%= query_path("/automations/new", { "shop" => @shop["shop_domain"] }) %>">Create automation</a>
+  </div>
+
+  <% unless @automation_enabled %>
+    <p class="muted">Automated sending is paused (<code>INVOICE_AUTOMATION_ENABLED=false</code>). Rules can be edited but will not send until it is re-enabled.</p>
+  <% end %>
+
+  <% if @rules.empty? %>
+    <div class="empty-state">
+      Save time by sending invoices automatically when orders are created, paid, or fulfilled.<br>
+      Create your first automation rule.
+    </div>
+  <% else %>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Trigger</th>
+          <th>Conditions</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% trigger_labels = @automation_triggers.each_with_object({}) { |item, memo| memo[item["value"]] = item["label"] } %>
+        <% @rules.each do |rule| %>
+          <tr>
+            <td><strong><%= h(rule["name"]) %></strong></td>
+            <td><%= h(trigger_labels[rule["trigger_event"]] || rule["trigger_event"]) %></td>
+            <td class="muted"><%= h(automation_conditions_summary(rule)) %></td>
+            <td>
+              <span class="<%= rule["enabled"] ? "badge badge-success" : "badge badge-muted" %>"><%= rule["enabled"] ? "Enabled" : "Disabled" %></span>
+            </td>
+            <td>
+              <div class="row-actions">
+                <a class="button-ghost" href="<%= query_path("/automations/#{rule['id']}/edit", { "shop" => @shop["shop_domain"] }) %>">Edit</a>
+                <form method="post" action="<%= query_path("/automations/#{rule['id']}/toggle", { "shop" => @shop["shop_domain"] }) %>">
+                  <button class="button-ghost" type="submit"><%= rule["enabled"] ? "Disable" : "Enable" %></button>
+                </form>
+                <form method="post" action="<%= query_path("/automations/#{rule['id']}/delete", { "shop" => @shop["shop_domain"] }) %>" onsubmit="return confirm('Delete this automation?');">
+                  <button class="button-ghost" type="submit">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>

@@ -5,6 +5,7 @@ require "webrick"
 require "send_invoice/app"
 require "send_invoice/configuration"
 require "send_invoice/database"
+require "send_invoice/invoice_automation_engine"
 require "send_invoice/migrator"
 require "send_invoice/shopify_client"
 require "send_invoice/store"
@@ -27,10 +28,18 @@ module SendInvoice
 
       shopify_client = ShopifyClient.new(config)
       Thread.new { register_webhooks(config, store, shopify_client) } unless config.mock_mode?
-      sync_engine = SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
+      automation_engine = InvoiceAutomationEngine.new(config: config, store: store)
+      sync_engine = SyncEngine.new(config: config, store: store, shopify_client: shopify_client, automation_engine: automation_engine)
       sync_engine.start_scheduler
       sync_engine.start_uninstall_cleanup_worker
-      application = App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+      automation_engine.start_scheduler
+      application = App.new(
+        config: config,
+        store: store,
+        sync_engine: sync_engine,
+        shopify_client: shopify_client,
+        automation_engine: automation_engine
+      )
 
       server = WEBrick::HTTPServer.new(
         Port: config.port,

@@ -1,0 +1,95 @@
+<% result = @delivery_result %>
+<section class="section-card">
+  <p class="eyebrow">Delivery log</p>
+  <h2>Invoice delivery attempts</h2>
+  <p class="section-note">Every manual, automated, and reminder invoice send, with retry and resend.</p>
+
+  <form method="get" action="/delivery-log" class="grid-three" style="margin-top:16px">
+    <input type="hidden" name="shop" value="<%= h(@shop["shop_domain"]) %>">
+    <div class="field">
+      <label for="search">Search</label>
+      <input id="search" name="search" type="text" value="<%= h(@filter_query) %>" placeholder="Order, customer, or email">
+    </div>
+    <div class="field">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        <option value="">All statuses</option>
+        <% @delivery_statuses.each do |status| %>
+          <option value="<%= status %>" <%= @filter_status == status ? "selected" : "" %>><%= status.capitalize %> (<%= @status_counts[status] || 0 %>)</option>
+        <% end %>
+      </select>
+    </div>
+    <div class="button-inline">
+      <button class="button" type="submit">Filter</button>
+    </div>
+  </form>
+</section>
+
+<section class="table-shell">
+  <% if result["deliveries"].empty? %>
+    <div class="empty-state">No invoice deliveries match your filters yet.</div>
+  <% else %>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Order</th>
+          <th>Recipient</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Subject</th>
+          <th class="align-right">PDF</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% result["deliveries"].each do |delivery| %>
+          <tr>
+            <td><%= format_datetime(delivery["created_at"]) %></td>
+            <td>
+              <% if delivery["order_name"] %>
+                <a class="button-ghost" href="<%= order_detail_path(delivery["order_id"], @shop["shop_domain"]) %>"><%= h(delivery["order_name"]) %></a>
+              <% else %>
+                <span class="muted"><%= h(delivery["order_id"]) %></span>
+              <% end %>
+            </td>
+            <td><%= h(delivery["recipient_email"] || "-") %></td>
+            <td><%= h(delivery_type_label(delivery)) %></td>
+            <td><span class="<%= badge_class(delivery_status_badge(delivery["delivery_status"])) %>"><%= h(delivery["delivery_status"]) %></span></td>
+            <td><%= h(delivery["subject"] || "-") %></td>
+            <td class="align-right"><%= delivery["pdf_size_bytes"].to_i.positive? ? "#{(delivery['pdf_size_bytes'].to_f / 1024).round(1)} KB" : "-" %></td>
+            <td>
+              <div class="row-actions">
+                <% if delivery["delivery_status"] == "failed" %>
+                  <form method="post" action="<%= query_path("/delivery-log/#{delivery['id']}/retry", { "shop" => @shop["shop_domain"] }) %>">
+                    <button class="button-ghost" type="submit">Retry</button>
+                  </form>
+                <% end %>
+                <form method="post" action="<%= query_path("/delivery-log/#{delivery['id']}/resend", { "shop" => @shop["shop_domain"] }) %>">
+                  <button class="button-ghost" type="submit">Resend</button>
+                </form>
+              </div>
+              <% if delivery["error_message"] %>
+                <p class="muted" style="margin-top:6px"><%= h(delivery["error_message"].to_s[0, 140]) %></p>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>
+
+<% if result["total_pages"] > 1 %>
+  <section class="section-card pagination">
+    <span>Page <%= result["page"] %> of <%= result["total_pages"] %></span>
+    <div class="pagination-links">
+      <% if result["page"] > 1 %>
+        <a class="button-ghost" href="<%= query_path("/delivery-log", { "shop" => @shop["shop_domain"], "search" => @filter_query, "status" => @filter_status, "page" => result["page"] - 1 }) %>">Previous</a>
+      <% end %>
+      <% if result["page"] < result["total_pages"] %>
+        <a class="button-ghost" href="<%= query_path("/delivery-log", { "shop" => @shop["shop_domain"], "search" => @filter_query, "status" => @filter_status, "page" => result["page"] + 1 }) %>">Next</a>
+      <% end %>
+    </div>
+  </section>
+<% end %>

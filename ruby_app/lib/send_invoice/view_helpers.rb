@@ -125,6 +125,41 @@ module SendInvoice
       query_path("/orders/send-invoice", { "order_id" => order_id.to_s, "shop" => shop_domain })
     end
 
+    def automation_conditions_summary(rule)
+      conditions = rule["conditions"] || {}
+      parts = []
+      parts << "financial: #{Array(conditions['financial_status']).join(', ')}" unless Array(conditions["financial_status"]).empty?
+      parts << "fulfillment: #{Array(conditions['fulfillment_status']).join(', ')}" unless Array(conditions["fulfillment_status"]).empty?
+      parts << "tags: #{Array(conditions['include_tags']).join(', ')}" unless Array(conditions["include_tags"]).empty?
+      parts << "excludes: #{Array(conditions['exclude_tags']).join(', ')}" unless Array(conditions["exclude_tags"]).empty?
+      parts << "min #{conditions['min_total']}" unless conditions["min_total"].nil?
+      parts << "max #{conditions['max_total']}" unless conditions["max_total"].nil?
+      if rule["trigger_event"] == "payment_reminder_due"
+        days = Array((rule["reminder_schedule"] || {})["days_after_order"])
+        parts << "days: #{days.join(', ')}" unless days.empty?
+      end
+      parts.empty? ? "All orders with a customer email" : parts.join(" · ")
+    end
+
+    def delivery_type_label(delivery)
+      {
+        "manual" => "Manual invoice",
+        "automation" => "Auto invoice",
+        "automation_reminder" => "Reminder",
+        "retry" => "Retry",
+        "manual_resend" => "Resend"
+      }.fetch(delivery["delivery_source"].to_s, "Invoice")
+    end
+
+    def delivery_status_badge(status)
+      case status.to_s
+      when "sent" then "completed"
+      when "outbox", "pending" then "running"
+      when "failed" then "failed"
+      else status.to_s
+      end
+    end
+
     def address_lines(address)
       return [] unless address.is_a?(Hash)
 
