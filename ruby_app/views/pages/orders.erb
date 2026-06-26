@@ -1,244 +1,12 @@
-<% clear_selection_path = query_path("/orders", {
-  "search" => @filters[:search],
-  "from" => @filters[:from],
-  "to" => @filters[:to],
-  "page" => @order_result["page"],
-  "limit" => @order_result["limit"]
-}) %>
-
-<% if @selected_order %>
-  <% raw = @selected_order["raw_data"].is_a?(Hash) ? @selected_order["raw_data"] : {} %>
-  <% subtotal = @selected_order["line_items"].sum { |line_item| line_item["totalAmount"].to_f } %>
-  <% item_quantity = @selected_order["line_items"].sum { |line_item| line_item["quantity"].to_i } %>
-  <% customer_name = [@selected_order["customer_first_name"], @selected_order["customer_last_name"]].compact.join(" ").strip %>
-  <% shipping_lines = address_lines(raw["shippingAddress"] || {}) %>
-  <% billing_lines = address_lines(raw["billingAddress"] || {}) %>
-  <% customer_lines = address_lines(raw["customer"] || {}) %>
-  <% tags = raw["tags"].is_a?(Array) ? raw["tags"].reject { |tag| tag.to_s.strip.empty? } : [] %>
-  <% transaction_rows = if raw["transactions"].is_a?(Array) && !raw["transactions"].empty?
-      raw["transactions"]
-    else
-      Array(@selected_order["transactions"]).map do |transaction|
-        {
-          "kind" => "PAYMENT",
-          "status" => @selected_order["financial_status"],
-          "gateway" => "Synced transaction",
-          "processedAt" => @selected_order["updated_at"],
-          "amountSet" => {
-            "shopMoney" => {
-              "amount" => transaction["amount"],
-              "currencyCode" => transaction["currency"] || @selected_order["total_price_currency"]
-            }
-          }
-        }
-      end
-    end %>
-
-  <section class="detail-panel order-detail-shell" id="order-detail">
-    <div class="toolbar">
-      <div>
-        <p class="eyebrow">Order overview</p>
-        <h2><%= h(@selected_order["name"]) %></h2>
-        <p class="section-note"><%= h(@selected_order["id"]) %></p>
-      </div>
-      <div class="button-inline">
-        <a class="button-ghost" href="<%= clear_selection_path %>">Back to orders</a>
-        <span class="<%= badge_class(@selected_order["financial_status"]) %>"><%= h(@selected_order["financial_status"]) %></span>
-        <span class="<%= badge_class(@selected_order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(@selected_order["fulfillment_status"] || "UNFULFILLED") %></span>
-      </div>
-    </div>
-
-    <div class="grid-four order-summary-grid">
-      <article class="metric-card">
-        <p class="label">Customer</p>
-        <p class="value"><%= h(customer_name.empty? ? "Guest" : customer_name) %></p>
-      </article>
-      <article class="metric-card">
-        <p class="label">Items</p>
-        <p class="value"><%= item_quantity %></p>
-      </article>
-      <article class="metric-card">
-        <p class="label">Order Total</p>
-        <p class="value"><%= format_money(@selected_order["total_price_amount"], @selected_order["total_price_currency"]) %></p>
-      </article>
-      <article class="metric-card">
-        <p class="label">Synced</p>
-        <p class="value"><%= time_ago(@selected_order["synced_at"]) %></p>
-      </article>
-    </div>
-
-    <div class="grid-two">
-      <article class="preview-card order-info-card">
-        <h3>Summary</h3>
-        <dl class="order-facts">
-          <div class="order-facts-row">
-            <dt>Created</dt>
-            <dd><%= format_datetime(@selected_order["created_at"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Updated</dt>
-            <dd><%= format_datetime(@selected_order["updated_at"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Subtotal</dt>
-            <dd><%= format_money(subtotal, @selected_order["total_price_currency"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Discounts</dt>
-            <dd><%= format_money(-@selected_order["total_discounts_amount"], @selected_order["total_price_currency"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Shipping</dt>
-            <dd><%= format_money(@selected_order["total_shipping_amount"], @selected_order["total_price_currency"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Tax</dt>
-            <dd><%= format_money(@selected_order["total_tax_amount"], @selected_order["total_price_currency"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Refunded</dt>
-            <dd><%= format_money(@selected_order["total_refunded_amount"], @selected_order["total_price_currency"]) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Weight</dt>
-            <dd><%= format_weight(@selected_order["total_weight"]) %></dd>
-          </div>
-        </dl>
-      </article>
-
-      <article class="preview-card order-info-card">
-        <h3>Customer</h3>
-        <dl class="order-facts">
-          <div class="order-facts-row">
-            <dt>Name</dt>
-            <dd><%= h(customer_name.empty? ? "Guest" : customer_name) %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Email</dt>
-            <dd><%= h(@selected_order["customer_email"] || "No email") %></dd>
-          </div>
-          <div class="order-facts-row">
-            <dt>Phone</dt>
-            <dd><%= h(@selected_order["customer_phone"] || "No phone") %></dd>
-          </div>
-        </dl>
-        <% if customer_lines.any? %>
-          <div class="order-address-block">
-            <% customer_lines.each do |line| %>
-              <p><%= h(line) %></p>
-            <% end %>
-          </div>
-        <% end %>
-      </article>
-
-      <article class="preview-card order-info-card">
-        <h3>Shipping</h3>
-        <% if shipping_lines.any? %>
-          <div class="order-address-block">
-            <% shipping_lines.each do |line| %>
-              <p><%= h(line) %></p>
-            <% end %>
-          </div>
-        <% else %>
-          <p class="muted" style="margin-top:10px">No shipping address was synced for this order.</p>
-        <% end %>
-      </article>
-
-      <article class="preview-card order-info-card">
-        <h3>Billing and notes</h3>
-        <% if billing_lines.any? %>
-          <div class="order-address-block">
-            <% billing_lines.each do |line| %>
-              <p><%= h(line) %></p>
-            <% end %>
-          </div>
-        <% else %>
-          <p class="muted" style="margin-top:10px">No billing address was synced for this order.</p>
-        <% end %>
-
-        <% if raw["note"].to_s.strip != "" %>
-          <div class="order-note">
-            <strong>Note</strong>
-            <p><%= h(raw["note"]) %></p>
-          </div>
-        <% end %>
-
-        <% if tags.any? %>
-          <div class="order-tag-row">
-            <% tags.each do |tag| %>
-              <span class="pill pill-muted"><%= h(tag) %></span>
-            <% end %>
-          </div>
-        <% end %>
-      </article>
-    </div>
-
-    <div class="table-shell">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>SKU</th>
-            <th>Vendor</th>
-            <th class="align-right">Qty</th>
-            <th class="align-right">Current Qty</th>
-            <th class="align-right">Line total</th>
-          </tr>
-        </thead>
-        <tbody>
-          <% @selected_order["line_items"].each do |line_item| %>
-            <tr>
-              <td>
-                <strong><%= h(line_item["title"]) %></strong>
-                <div class="table-subcopy"><%= h(line_item["variantTitle"] || "Default variant") %></div>
-              </td>
-              <td><%= h(line_item["sku"] || "-") %></td>
-              <td><%= h(line_item["vendor"] || "-") %></td>
-              <td class="align-right"><%= line_item["quantity"] %></td>
-              <td class="align-right"><%= line_item["currentQuantity"] %></td>
-              <td class="align-right"><%= format_money(line_item["totalAmount"], line_item["totalCurrency"]) %></td>
-            </tr>
-          <% end %>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="table-shell">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Transaction</th>
-            <th>Status</th>
-            <th>Gateway</th>
-            <th>Processed</th>
-            <th class="align-right">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          <% transaction_rows.each do |transaction| %>
-            <% amount = transaction.dig("amountSet", "shopMoney", "amount") || transaction["amount"] %>
-            <% currency = transaction.dig("amountSet", "shopMoney", "currencyCode") || transaction["currency"] || @selected_order["total_price_currency"] %>
-            <tr>
-              <td><strong><%= h((transaction["kind"] || "Payment").to_s.tr("_", " ")) %></strong></td>
-              <td><span class="<%= badge_class(transaction["status"] || @selected_order["financial_status"]) %>"><%= h(transaction["status"] || @selected_order["financial_status"]) %></span></td>
-              <td><%= h(transaction["gateway"] || "Shopify") %></td>
-              <td><%= format_datetime(transaction["processedAt"] || @selected_order["updated_at"]) %></td>
-              <td class="align-right"><%= format_money(amount, currency) %></td>
-            </tr>
-          <% end %>
-        </tbody>
-      </table>
-    </div>
-  </section>
-<% elsif @selected_order_missing %>
-  <section class="section-card order-missing-state" id="order-detail">
+<% if @selected_order_missing %>
+  <section class="section-card order-missing-state">
     <div class="toolbar">
       <div>
         <p class="eyebrow">Order detail</p>
         <h2>Order not found</h2>
         <p class="section-note">We could not find that order in the synced data for this shop.</p>
       </div>
-      <a class="button-ghost" href="<%= clear_selection_path %>">Back to orders</a>
+      <a class="button-ghost" href="/orders">Back to orders</a>
     </div>
   </section>
 <% end %>
@@ -290,20 +58,12 @@
           <th class="align-right">Total</th>
           <th>Payment</th>
           <th>Fulfillment</th>
-          <th>Detail</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         <% @order_result["orders"].each do |order| %>
-          <% link = query_path("/orders", {
-            "search" => @filters[:search],
-            "from" => @filters[:from],
-            "to" => @filters[:to],
-            "page" => @order_result["page"],
-            "limit" => @order_result["limit"],
-            "order_id" => order["id"]
-          }) + "#order-detail" %>
-          <tr class="<%= "is-selected" if @selected_order && @selected_order["id"] == order["id"] %>">
+          <tr>
             <td><strong><%= h(order["name"]) %></strong></td>
             <td><%= format_date(order["created_at"]) %></td>
             <td><%= h("#{order["customer_first_name"]} #{order["customer_last_name"]}".strip) %></td>
@@ -312,7 +72,13 @@
             <td class="align-right"><%= format_money(order["total_price_amount"], order["total_price_currency"]) %></td>
             <td><span class="<%= badge_class(order["financial_status"]) %>"><%= h(order["financial_status"]) %></span></td>
             <td><span class="<%= badge_class(order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(order["fulfillment_status"] || "UNFULFILLED") %></span></td>
-            <td><a class="button-ghost" href="<%= link %>">View order</a></td>
+            <td>
+              <div class="row-actions">
+                <a class="button-ghost" href="<%= order_detail_path(order["id"], @shop["shop_domain"]) %>">View order</a>
+                <a class="button-ghost" href="<%= order_invoice_path(order["id"], @shop["shop_domain"]) %>" target="_blank" rel="noreferrer">Invoice</a>
+                <a class="button-ghost" href="<%= order_invoice_pdf_path(order["id"], @shop["shop_domain"]) %>">PDF</a>
+              </div>
+            </td>
           </tr>
         <% end %>
       </tbody>

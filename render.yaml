@@ -26,6 +26,10 @@ services:
         value: read_orders
       - key: SHOPIFY_API_VERSION
         value: 2026-04
+      # Flip to "true" only after Protected Customer Data access is approved
+      # in the Partner Dashboard and the app is reinstalled on the store.
+      - key: ENABLE_ORDER_WEBHOOKS
+        value: "false"
       - key: AUTO_SYNC_ENABLED
         value: "false"
       - key: AUTO_SYNC_INTERVAL_SECONDS

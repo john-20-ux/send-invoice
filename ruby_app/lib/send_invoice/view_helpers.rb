@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "cgi"
+require "erb"
 require "time"
 require "uri"
 
@@ -106,6 +107,22 @@ module SendInvoice
       end
       query = URI.encode_www_form(filtered)
       query.empty? ? path : "#{path}?#{query}"
+    end
+
+    def order_detail_path(order_id, shop_domain = nil)
+      query_path("/orders/detail", { "order_id" => order_id.to_s, "shop" => shop_domain })
+    end
+
+    def order_invoice_path(order_id, shop_domain = nil)
+      query_path("/orders/invoice", { "order_id" => order_id.to_s, "shop" => shop_domain })
+    end
+
+    def order_invoice_pdf_path(order_id, shop_domain = nil)
+      query_path("/orders/invoice.pdf", { "order_id" => order_id.to_s, "shop" => shop_domain })
+    end
+
+    def order_send_invoice_path(order_id, shop_domain = nil)
+      query_path("/orders/send-invoice", { "order_id" => order_id.to_s, "shop" => shop_domain })
     end
 
     def address_lines(address)

@@ -5,6 +5,11 @@ name = "Send Invoice"
 client_id = "your_production_api_key_here"
 application_url = "https://app.sendinvoice.yourdomain.com"
 
+# Standalone app: Shopify opens it full-page in a new tab instead of inside the
+# admin iframe. This app uses its own UI (no App Bridge/Polaris), so embedding
+# would be blocked by the browser (no frame-ancestors CSP).
+embedded = false
+
 [auth]
 redirect_urls = [
   "https://app.sendinvoice.yourdomain.com/auth/callback"

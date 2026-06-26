@@ -1,0 +1,84 @@
+<% document = @invoice_document %>
+<section
+  class="template-preview"
+  data-template="<%= h(document["template"]) %>"
+  data-density="<%= h(document["density"]) %>"
+  data-header-align="<%= h(document["header_align"]) %>"
+  data-surface-tone="<%= h(document["surface_tone"]) %>"
+  style="--invoice-accent:<%= h(document["accent_color"]) %>;--invoice-font:<%= h(document["font_family"]) %>;"
+>
+  <header class="preview-header">
+    <div class="preview-brand">
+      <div class="preview-logo-mark"><%= h(document["logo_text"]) %></div>
+      <div>
+        <span class="preview-style-badge"><%= h(document["template"].to_s.capitalize) %></span>
+        <h2><%= h(document["company_name"]) %></h2>
+        <p class="muted"><%= h(document["tagline"]) %></p>
+      </div>
+    </div>
+    <div class="preview-meta">
+      <span><strong><%= h(document["invoice_number"]) %></strong></span>
+      <span><%= h(document["invoice_date"]) %></span>
+      <span><%= h(document["due_date"]) %></span>
+    </div>
+  </header>
+
+  <section class="preview-grid">
+    <div>
+      <p class="eyebrow">Issuer</p>
+      <p><%= h(document["address"]) %></p>
+      <p><%= h(document["phone"]) %></p>
+      <p><%= h(document["email"]) %></p>
+      <% if document.dig("visible_fields", "gst") %><p><%= h(document["gst"]) %></p><% end %>
+      <% if document.dig("visible_fields", "website") %><p><%= h(document["website"]) %></p><% end %>
+    </div>
+    <div>
+      <p class="eyebrow">Bill to</p>
+      <p><%= h(document["bill_to"]) %></p>
+      <% document["client_address"].to_s.split("\n").reject(&:empty?).each do |line| %>
+        <p><%= h(line) %></p>
+      <% end %>
+      <% unless document["client_email"].to_s.empty? %><p><%= h(document["client_email"]) %></p><% end %>
+      <% unless document["payment_terms"].to_s.empty? %><p class="muted" style="margin-top:8px"><%= h(document["payment_terms"]) %></p><% end %>
+    </div>
+  </section>
+
+  <table class="preview-line-items">
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th class="align-right">Qty</th>
+        <th class="align-right">Rate</th>
+        <th class="align-right">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% document["line_items"].each do |line_item| %>
+        <tr>
+          <td>
+            <%= h(line_item["desc"]) %>
+            <% unless line_item["variant"].to_s.empty? %><span class="muted">— <%= h(line_item["variant"]) %></span><% end %>
+          </td>
+          <td class="align-right"><%= line_item["qty"] %></td>
+          <td class="align-right"><%= document["currency_symbol"] %><%= format('%.2f', line_item["rate"]) %></td>
+          <td class="align-right"><%= document["currency_symbol"] %><%= format('%.2f', line_item["total"]) %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+
+  <footer class="preview-footer">
+    <div>
+      <% if document.dig("visible_fields", "notes") %><p class="muted"><%= h(document["notes"]) %></p><% end %>
+      <% if document.dig("visible_fields", "bank_details") %><p class="muted" style="margin-top:8px"><%= h(document["bank_details"]) %></p><% end %>
+      <% if document.dig("visible_fields", "terms") %><p class="muted" style="margin-top:8px"><%= h(document["terms"]) %></p><% end %>
+    </div>
+    <div class="totals-stack">
+      <span>Subtotal <strong><%= document["currency_symbol"] %><%= format('%.2f', document["subtotal_amount"]) %></strong></span>
+      <span>Discounts <strong><%= document["currency_symbol"] %><%= format('%.2f', document["discounts_amount"]) %></strong></span>
+      <span>Shipping <strong><%= document["currency_symbol"] %><%= format('%.2f', document["shipping_amount"]) %></strong></span>
+      <span>Tax <strong><%= document["currency_symbol"] %><%= format('%.2f', document["tax_amount"]) %></strong></span>
+      <span>Total <strong><%= document["currency_symbol"] %><%= format('%.2f', document["total_amount"]) %></strong></span>
+    </div>
+  </footer>
+</section>

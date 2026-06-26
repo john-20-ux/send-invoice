@@ -189,6 +189,31 @@ module SendInvoice
           CREATE UNIQUE INDEX IF NOT EXISTS idx_async_job_requests_active_dedupe
             ON async_job_requests(dedupe_key)
             WHERE status IN ('queued', 'claimed', 'dispatched', 'running');
+
+          CREATE TABLE IF NOT EXISTS invoice_deliveries (
+            id TEXT PRIMARY KEY,
+            shop_domain TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            recipient_email TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body_text TEXT NOT NULL,
+            invoice_filename TEXT NOT NULL,
+            delivery_status TEXT NOT NULL,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT,
+            external_message_id TEXT,
+            outbox_path TEXT,
+            pdf_size_bytes INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            sent_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (shop_domain) REFERENCES shops(shop_domain) ON DELETE CASCADE,
+            FOREIGN KEY (order_id, shop_domain) REFERENCES orders(id, shop_domain) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_invoice_deliveries_order_created
+            ON invoice_deliveries(shop_domain, order_id, created_at DESC);
         SQL
 
         ensure_column(db, "orders", "updated_at", "TEXT")
@@ -203,11 +228,14 @@ module SendInvoice
         db.execute("CREATE INDEX IF NOT EXISTS idx_sync_command_locks_owner ON sync_command_locks(owner_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_async_job_requests_status_available ON async_job_requests(status, available_at, created_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_async_job_requests_shop_created ON async_job_requests(shop_domain, created_at DESC)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_invoice_deliveries_order_created ON invoice_deliveries(shop_domain, order_id, created_at DESC)")
         db.execute(<<~SQL)
           CREATE UNIQUE INDEX IF NOT EXISTS idx_async_job_requests_active_dedupe
           ON async_job_requests(dedupe_key)
           WHERE status IN ('queued', 'claimed', 'dispatched', 'running')
         SQL
+
+        normalize_shop_domain_storage(db)
       end
     end
 
@@ -218,6 +246,57 @@ module SendInvoice
       return if columns.include?(column)
 
       db.execute("ALTER TABLE #{table} ADD COLUMN #{column} #{definition}")
+    end
+
+    def normalize_shop_domain_storage(db)
+      child_tables = %w[
+        orders
+        sync_logs
+        sessions
+        sync_states
+        bulk_sync_jobs
+        batch_logs
+        sync_command_locks
+        async_job_requests
+      ]
+
+      db.execute("PRAGMA foreign_keys = OFF")
+      child_tables.each do |table|
+        db.execute("UPDATE #{table} SET shop_domain = CAST(shop_domain AS TEXT) WHERE typeof(shop_domain) = 'blob'")
+      end
+      deduplicate_shop_rows(db)
+      db.execute("UPDATE shops SET shop_domain = CAST(shop_domain AS TEXT) WHERE typeof(shop_domain) = 'blob'")
+    ensure
+      db.execute("PRAGMA foreign_keys = ON")
+    end
+
+    def deduplicate_shop_rows(db)
+      rows = db.execute(<<~SQL)
+        SELECT rowid, shop_domain, CAST(shop_domain AS TEXT) AS normalized_shop_domain,
+               access_token, updated_at, installed_at
+        FROM shops
+        ORDER BY
+          CASE WHEN access_token IS NOT NULL AND access_token != '' THEN 0 ELSE 1 END,
+          updated_at DESC,
+          installed_at DESC,
+          rowid DESC
+      SQL
+
+      grouped = rows.group_by { |row| row["normalized_shop_domain"] || row["shop_domain"].to_s }
+      grouped.each_value do |group|
+        next if group.length <= 1
+
+        keeper = group.first
+        duplicates = group.drop(1)
+        duplicates.each do |row|
+          db.execute("DELETE FROM shops WHERE rowid = ?", row["rowid"])
+        end
+
+        db.execute("UPDATE shops SET shop_domain = ? WHERE rowid = ?", [
+          keeper["normalized_shop_domain"],
+          keeper["rowid"]
+        ])
+      end
     end
   end
 end

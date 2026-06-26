@@ -1,5 +1,7 @@
 <% hidden = @sync_status["status"] == "idle" && !@sync_status["lastSyncedAt"] %>
 <% progress = percentage(@sync_status["ordersSynced"], @sync_status["totalEstimated"]) %>
+<% sync_error = @sync_status["errorMessage"].to_s %>
+<% protected_access_blocked = sync_error.match?(/not approved to access the Order object|not approved to subscribe to webhook topics containing protected customer data/i) %>
 <div
   id="sync-banner"
   class="sync-banner <%= "is-hidden" if hidden %>"
@@ -45,6 +47,18 @@
     <span data-role="progress-bar" style="width:<%= progress %>%"></span>
   </div>
   <span class="sync-progress-value" data-role="progress-value"><%= progress %>%</span>
+  <div class="sync-banner-actions">
+    <form method="post" action="/orders/sync">
+      <button class="button" type="submit" <% if @sync_status["status"] == "running" %>disabled<% end %>>
+        <%= @sync_status["status"] == "running" ? "Syncing..." : "Sync now" %>
+      </button>
+    </form>
+  </div>
+  <% if protected_access_blocked %>
+    <p class="sync-banner-note">
+      Auto sync is blocked until Shopify approves protected customer data access for this app.
+    </p>
+  <% end %>
   <% if @queue_ops_admin %>
     <div class="sync-recovery-panel is-hidden" data-role="async-request-panel">
       <div class="sync-recovery-header">

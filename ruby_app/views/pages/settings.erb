@@ -32,6 +32,21 @@
 
 <div class="grid-two">
   <section class="section-card">
+    <p class="eyebrow">Delivery</p>
+    <h2>Invoice sending</h2>
+    <p class="section-note">
+      <% if @invoice_delivery_mode == "smtp" %>
+        SMTP delivery is active for order invoice sends.
+      <% else %>
+        Order invoice sends currently use the local outbox fallback until SMTP is configured.
+      <% end %>
+    </p>
+    <div class="button-inline" style="margin-top:18px">
+      <a class="button-secondary" href="/notifications">Manage email template</a>
+    </div>
+  </section>
+
+  <section class="section-card">
     <p class="eyebrow">Automation</p>
     <h2>Notifications</h2>
     <p class="section-note">Configure email, WhatsApp, Slack, and Basecamp delivery rules.</p>
@@ -46,6 +61,16 @@
     <p class="section-note">You are currently on the <strong><%= h(@shop["current_plan"].capitalize) %></strong> plan.</p>
     <div class="button-inline" style="margin-top:18px">
       <a class="button-secondary" href="/settings/plans">View plans</a>
+    </div>
+  </section>
+
+  <section class="section-card">
+    <p class="eyebrow">Trust</p>
+    <h2>Policies</h2>
+    <p class="section-note">Use these public pages for app review, merchant trust, and support references.</p>
+    <div class="button-inline" style="margin-top:18px">
+      <a class="button-secondary" href="/legal/privacy" target="_blank" rel="noreferrer">Privacy policy</a>
+      <a class="button-secondary" href="/legal/terms" target="_blank" rel="noreferrer">Terms of service</a>
     </div>
   </section>
 </div>

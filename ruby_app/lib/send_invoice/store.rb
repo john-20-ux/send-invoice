@@ -11,6 +11,7 @@ module SendInvoice
     end
 
     def ensure_shop(shop_domain, attributes = {})
+      shop_domain = normalize_text(shop_domain)
       existing = shop(shop_domain)
       if existing
         update_shop(shop_domain, attributes) unless attributes.empty?
@@ -57,8 +58,9 @@ module SendInvoice
     end
 
     def shop(shop_domain)
+      shop_domain = normalize_text(shop_domain)
       @database.with_connection do |db|
-        row = db.get_first_row("SELECT * FROM shops WHERE shop_domain = ?", shop_domain)
+        row = db.get_first_row("SELECT * FROM shops WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
         hydrate_shop(row)
       end
     end
@@ -72,6 +74,7 @@ module SendInvoice
     end
 
     def mark_shop_uninstalled(shop_domain, uninstalled_at:, scheduled_for_deletion_at:)
+      shop_domain = normalize_text(shop_domain)
       now = Time.now.utc.iso8601
 
       @database.with_connection do |db|
@@ -82,7 +85,7 @@ module SendInvoice
               scheduled_for_deletion_at = ?,
               data_deletion_started_at = ?,
               updated_at = ?
-          WHERE shop_domain = ?
+          WHERE CAST(shop_domain AS TEXT) = ?
         SQL
       end
 
@@ -103,11 +106,12 @@ module SendInvoice
     end
 
     def claim_shop_data_deletion(shop_domain, claimed_at: Time.now.utc.iso8601)
+      shop_domain = normalize_text(shop_domain)
       changed = @database.with_connection do |db|
         db.execute(<<~SQL, [claimed_at, claimed_at, shop_domain, claimed_at])
           UPDATE shops
           SET data_deletion_started_at = ?, updated_at = ?
-          WHERE shop_domain = ?
+          WHERE CAST(shop_domain AS TEXT) = ?
             AND uninstalled_at IS NOT NULL
             AND scheduled_for_deletion_at IS NOT NULL
             AND scheduled_for_deletion_at <= ?
@@ -120,9 +124,10 @@ module SendInvoice
     end
 
     def delete_shop_data(shop_domain)
+      shop_domain = normalize_text(shop_domain)
       @database.with_connection do |db|
-        db.execute("DELETE FROM sessions WHERE shop_domain = ?", shop_domain)
-        db.execute("DELETE FROM shops WHERE shop_domain = ?", shop_domain)
+        db.execute("DELETE FROM sessions WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
+        db.execute("DELETE FROM shops WHERE CAST(shop_domain AS TEXT) = ?", shop_domain)
       end
 
       true
@@ -486,6 +491,7 @@ module SendInvoice
     def update_shop(shop_domain, attributes)
       return if attributes.nil? || attributes.empty?
 
+      shop_domain = normalize_text(shop_domain)
       updates = []
       values = []
       normalized = normalize_keys(attributes)
@@ -514,7 +520,7 @@ module SendInvoice
       values << shop_domain
 
       @database.with_connection do |db|
-        db.execute("UPDATE shops SET #{updates.join(', ')} WHERE shop_domain = ?", values)
+        db.execute("UPDATE shops SET #{updates.join(', ')} WHERE CAST(shop_domain AS TEXT) = ?", values)
       end
     end
 
@@ -609,6 +615,74 @@ module SendInvoice
       @database.with_connection do |db|
         row = db.get_first_row("SELECT * FROM orders WHERE shop_domain = ? AND id = ?", [shop_domain, order_id])
         hydrate_order(row)
+      end
+    end
+
+    def create_invoice_delivery(shop_domain, order_id, attributes = {})
+      now = Time.now.utc.iso8601
+      payload = {
+        "id" => SecureRandom.uuid,
+        "shop_domain" => normalize_text(shop_domain),
+        "order_id" => normalize_text(order_id),
+        "recipient_email" => normalize_text(attributes["recipient_email"] || attributes[:recipient_email]),
+        "subject" => normalize_text(attributes["subject"] || attributes[:subject]),
+        "body_text" => normalize_text(attributes["body_text"] || attributes[:body_text]),
+        "invoice_filename" => normalize_text(attributes["invoice_filename"] || attributes[:invoice_filename]),
+        "delivery_status" => normalize_text(attributes["delivery_status"] || attributes[:delivery_status] || "pending"),
+        "delivery_channel" => normalize_text(attributes["delivery_channel"] || attributes[:delivery_channel] || "email"),
+        "delivery_target" => normalize_text(attributes["delivery_target"] || attributes[:delivery_target]),
+        "external_message_id" => normalize_text(attributes["external_message_id"] || attributes[:external_message_id]),
+        "outbox_path" => normalize_text(attributes["outbox_path"] || attributes[:outbox_path]),
+        "pdf_size_bytes" => (attributes["pdf_size_bytes"] || attributes[:pdf_size_bytes] || 0).to_i,
+        "error_message" => normalize_text(attributes["error_message"] || attributes[:error_message]),
+        "created_at" => now,
+        "sent_at" => attributes["sent_at"] || attributes[:sent_at],
+        "updated_at" => now
+      }
+      values = payload.values_at(
+        "id", "shop_domain", "order_id", "recipient_email", "subject", "body_text",
+        "invoice_filename", "delivery_status", "delivery_channel", "delivery_target",
+        "external_message_id", "outbox_path", "pdf_size_bytes", "error_message",
+        "created_at", "sent_at", "updated_at"
+      )
+
+      @database.with_connection do |db|
+        db.execute(<<~SQL, values)
+          INSERT INTO invoice_deliveries (
+            id, shop_domain, order_id, recipient_email, subject, body_text,
+            invoice_filename, delivery_status, delivery_channel, delivery_target,
+            external_message_id, outbox_path, pdf_size_bytes, error_message,
+            created_at, sent_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SQL
+      end
+
+      invoice_delivery(payload["id"])
+    end
+
+    def invoice_deliveries(shop_domain, order_id, limit: 20)
+      @database.with_connection do |db|
+        db.execute(
+          "SELECT * FROM invoice_deliveries WHERE shop_domain = ? AND order_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+          [normalize_text(shop_domain), normalize_text(order_id), limit.to_i]
+        ).map { |row| hydrate_invoice_delivery(row) }
+      end
+    end
+
+    def latest_invoice_delivery(shop_domain, order_id)
+      @database.with_connection do |db|
+        row = db.get_first_row(
+          "SELECT * FROM invoice_deliveries WHERE shop_domain = ? AND order_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+          [normalize_text(shop_domain), normalize_text(order_id)]
+        )
+        hydrate_invoice_delivery(row)
+      end
+    end
+
+    def invoice_delivery(delivery_id)
+      @database.with_connection do |db|
+        row = db.get_first_row("SELECT * FROM invoice_deliveries WHERE id = ?", delivery_id)
+        hydrate_invoice_delivery(row)
       end
     end
 
@@ -1018,6 +1092,16 @@ module SendInvoice
       end
     end
 
+    def normalize_text(value)
+      return nil if value.nil?
+
+      text = value.to_s.dup
+      text.force_encoding("UTF-8") if text.respond_to?(:force_encoding)
+      text.encode("UTF-8", invalid: :replace, undef: :replace, replace: "")
+    rescue Encoding::UndefinedConversionError, Encoding::InvalidByteSequenceError
+      value.to_s
+    end
+
     def truthy_db(value)
       value ? 1 : 0
     end
@@ -1035,22 +1119,22 @@ module SendInvoice
 
       {
         "id" => row["id"],
-        "shop_domain" => row["shop_domain"],
-        "shop_name" => row["shop_name"],
-        "access_token" => row["access_token"],
-        "scopes" => row["scopes"],
-        "owner_email" => row["owner_email"],
-        "installed_at" => row["installed_at"],
-        "uninstalled_at" => row["uninstalled_at"],
-        "scheduled_for_deletion_at" => row["scheduled_for_deletion_at"],
-        "data_deletion_started_at" => row["data_deletion_started_at"],
-        "updated_at" => row["updated_at"],
+        "shop_domain" => normalize_text(row["shop_domain"]),
+        "shop_name" => normalize_text(row["shop_name"]),
+        "access_token" => normalize_text(row["access_token"]),
+        "scopes" => normalize_text(row["scopes"]),
+        "owner_email" => normalize_text(row["owner_email"]),
+        "installed_at" => normalize_text(row["installed_at"]),
+        "uninstalled_at" => normalize_text(row["uninstalled_at"]),
+        "scheduled_for_deletion_at" => normalize_text(row["scheduled_for_deletion_at"]),
+        "data_deletion_started_at" => normalize_text(row["data_deletion_started_at"]),
+        "updated_at" => normalize_text(row["updated_at"]),
         "onboarded" => row["onboarded"].to_i == 1,
-        "current_plan" => row["current_plan"],
-        "trial_started_at" => row["trial_started_at"],
+        "current_plan" => normalize_text(row["current_plan"]),
+        "trial_started_at" => normalize_text(row["trial_started_at"]),
         "tax_rate" => row["tax_rate"].to_f,
-        "currency" => row["currency"],
-        "font_name" => row["font_name"],
+        "currency" => normalize_text(row["currency"]),
+        "font_name" => normalize_text(row["font_name"]),
         "notification_config" => JSON.parse(row["notification_config"].to_s),
         "invoice_template_config" => JSON.parse(row["invoice_template_config"].to_s),
         "vendor_edits" => JSON.parse(row["vendor_edits"].to_s)
@@ -1138,6 +1222,30 @@ module SendInvoice
         "error_message" => row["error_message"],
         "started_at" => row["started_at"],
         "completed_at" => row["completed_at"],
+        "updated_at" => row["updated_at"]
+      }
+    end
+
+    def hydrate_invoice_delivery(row)
+      return nil unless row
+
+      {
+        "id" => row["id"],
+        "shop_domain" => row["shop_domain"],
+        "order_id" => row["order_id"],
+        "recipient_email" => row["recipient_email"],
+        "subject" => row["subject"],
+        "body_text" => row["body_text"],
+        "invoice_filename" => row["invoice_filename"],
+        "delivery_status" => row["delivery_status"],
+        "delivery_channel" => row["delivery_channel"],
+        "delivery_target" => row["delivery_target"],
+        "external_message_id" => row["external_message_id"],
+        "outbox_path" => row["outbox_path"],
+        "pdf_size_bytes" => row["pdf_size_bytes"].to_i,
+        "error_message" => row["error_message"],
+        "created_at" => row["created_at"],
+        "sent_at" => row["sent_at"],
         "updated_at" => row["updated_at"]
       }
     end

@@ -290,91 +290,149 @@
 
     var label = $('[data-role="sync-label"]', shell);
     var meta = $('[data-role="sync-meta"]', shell);
+    var detail = $('[data-role="sync-error-detail"]', shell);
     var progress = $('[data-role="sync-progress"]', shell);
     var retry = $('[data-role="sync-retry"]', shell);
+    var shopDomain = shell.dataset.shopDomain || new URL(window.location.href).searchParams.get("shop") || "";
+
+    function syncErrorMessage(status) {
+      if (status.errorMessage) return status.errorMessage;
+      if (!Array.isArray(status.batches)) return "";
+      var failedBatch = status.batches.find(function (batch) {
+        return batch.status === "failed" && batch.error_message;
+      });
+      return failedBatch ? failedBatch.error_message : "";
+    }
+
+    function friendlySyncError(errorMessage) {
+      if (!errorMessage) return "";
+      if (/not approved to access the Order object/i.test(errorMessage)) {
+        return "Enable protected customer data access for this app in Shopify Partner Dashboard, then retry the sync.";
+      }
+      return errorMessage;
+    }
+
+    function renderStatus(status) {
+      var total = asNumber(status.totalEstimated);
+      var synced = asNumber(status.ordersSynced);
+      var percent = total > 0 ? Math.round((synced / total) * 100) : 0;
+      var errorMessage = syncErrorMessage(status);
+      var friendlyError = friendlySyncError(errorMessage);
+
+      if (label) {
+        label.textContent = status.status === "failed" ? "Sync failed" : "Setting up your store";
+      }
+
+      if (meta) {
+        if (status.status === "running") {
+          if (status.firstTimeSyncStatus === "initial_sync_pending") {
+            meta.textContent = "Loading the latest 3 days of orders first.";
+          } else {
+            meta.textContent = "Syncing " + synced + " of " + total + " orders";
+          }
+        } else if (status.status === "completed") {
+          if (status.fullSixMonthsSyncCompleted === false) {
+            meta.textContent = "Recent orders are ready. Older orders will continue syncing in the background.";
+          } else {
+            meta.textContent = "Sync complete. Redirecting to your dashboard.";
+          }
+        } else if (status.status === "failed") {
+          meta.textContent = /not approved to access the Order object/i.test(errorMessage)
+            ? "Shopify is blocking order access for this app."
+            : "Something went wrong while syncing your store.";
+        } else {
+          meta.textContent = "Preparing your initial order sync.";
+        }
+      }
+
+      if (detail) {
+        if (friendlyError) {
+          detail.hidden = false;
+          detail.textContent = friendlyError;
+        } else {
+          detail.hidden = true;
+          detail.textContent = "";
+        }
+      }
+
+      if (progress) {
+        progress.style.width = percent + "%";
+      }
+
+      if (status.status === "completed") {
+        window.setTimeout(function () {
+          window.location.href = apiPathWithShop(shell.dataset.completePath, shopDomain);
+        }, 500);
+        return false;
+      }
+
+      if (retry) {
+        retry.hidden = status.status !== "failed";
+      }
+
+      return status.status === "running" || status.status === "queued";
+    }
 
     async function refreshStatus() {
       try {
-        var status = await requestJson(shell.dataset.statusPath);
-        var total = asNumber(status.totalEstimated);
-        var synced = asNumber(status.ordersSynced);
-        var percent = total > 0 ? Math.round((synced / total) * 100) : 0;
-
-        if (label) {
-          label.textContent = status.status === "failed" ? "Sync failed" : "Setting up your store";
-        }
-
-        if (meta) {
-          if (status.status === "running") {
-            if (status.firstTimeSyncStatus === "initial_sync_pending") {
-              meta.textContent = "Loading the latest 3 days of orders first.";
-            } else {
-              meta.textContent = "Syncing " + synced + " of " + total + " orders";
-            }
-          } else if (status.status === "completed") {
-            if (status.fullSixMonthsSyncCompleted === false) {
-              meta.textContent = "Recent orders are ready. Older orders will continue syncing in the background.";
-            } else {
-              meta.textContent = "Sync complete. Redirecting to your dashboard.";
-            }
-          } else if (status.status === "failed") {
-            meta.textContent = "Something went wrong while syncing your store.";
-          } else {
-            meta.textContent = "Preparing your initial order sync.";
-          }
-        }
-
-        if (progress) {
-          progress.style.width = percent + "%";
-        }
-
-        if (status.status === "completed") {
-          window.setTimeout(function () {
-            window.location.href = shell.dataset.completePath;
-          }, 500);
-          return true;
-        }
-
-        if (status.status === "failed" && retry) {
-          retry.hidden = false;
-        }
-
-        return status.status === "running";
+        var status = await requestJson(apiPathWithShop(shell.dataset.statusPath, shopDomain));
+        return renderStatus(status);
       } catch (_error) {
         return false;
       }
     }
 
-    async function startSync() {
-      if (retry) retry.hidden = true;
-      try {
-        await requestJson(shell.dataset.apiPath, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "first_time" })
-        });
-      } catch (_error) {
-        // Ignore initial trigger failures; polling will show the latest state.
-      }
+    async function pollStatus() {
+      var keepGoing = await refreshStatus();
+      if (!keepGoing) return;
 
       var interval = window.setInterval(async function () {
-        var keepGoing = await refreshStatus();
-        if (!keepGoing) {
-          clearInterval(interval);
-          if (shell.dataset.autostart === "true") {
-            await refreshStatus();
-          }
-        }
+        var next = await refreshStatus();
+        if (!next) clearInterval(interval);
       }, 1500);
+    }
+
+    async function startSync(triggerRequest) {
+      if (retry) retry.hidden = true;
+      if (triggerRequest) {
+        try {
+          await requestJson(apiPathWithShop(shell.dataset.apiPath, shopDomain), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "first_time" })
+          });
+        } catch (_error) {
+          // Ignore trigger failures; the latest status will explain what happened.
+        }
+      }
+
+      await pollStatus();
     }
 
     if (retry) {
       retry.addEventListener("click", function () {
-        startSync();
+        startSync(true);
       });
     }
 
-    startSync();
+    (async function init() {
+      try {
+        var status = await requestJson(apiPathWithShop(shell.dataset.statusPath, shopDomain));
+        var keepGoing = renderStatus(status);
+        if (status.status === "idle") {
+          await startSync(true);
+          return;
+        }
+
+        if (keepGoing) {
+          await pollStatus();
+        }
+      } catch (_error) {
+        if (shell.dataset.autostart === "true") {
+          await startSync(true);
+        }
+      }
+    })();
   }
 
   function bootInvoicePreview() {

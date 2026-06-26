@@ -10,10 +10,20 @@ module SendInvoice
                 :bind_address,
                 :database_path,
                 :host,
+                :order_webhooks_enabled,
+                :outbox_path,
                 :port,
                 :public_path,
                 :root,
                 :session_cookie_name,
+                :smtp_authentication,
+                :smtp_from_email,
+                :smtp_from_name,
+                :smtp_host,
+                :smtp_password,
+                :smtp_port,
+                :smtp_use_tls,
+                :smtp_username,
                 :shopify_api_key,
                 :shopify_api_secret,
                 :shopify_scopes,
@@ -49,6 +59,7 @@ module SendInvoice
       @app_root = File.join(root, "ruby_app")
       @views_path = File.join(@app_root, "views")
       @public_path = File.join(@app_root, "public")
+      @outbox_path = env["OUTBOX_PATH"] || File.join(@app_root, "tmp", "outbox")
       @bind_address = env["BIND_ADDRESS"] || "0.0.0.0"
       @database_path = env["DATABASE_PATH"] || File.join(@app_root, "db", "send_invoice.sqlite3")
       @background_backend = (env["BACKGROUND_BACKEND"] || "threads").to_s.strip
@@ -59,15 +70,36 @@ module SendInvoice
       @shopify_scopes = env.fetch("SHOPIFY_SCOPES", "read_orders").split(",").map(&:strip).reject(&:empty?)
       @api_version = env["SHOPIFY_API_VERSION"] || "2026-04"
       @auto_sync_enabled = env["AUTO_SYNC_ENABLED"] == "true"
+      # Order webhook topics (ORDERS_CREATE/UPDATED/EDITED) carry protected customer
+      # data and require approved Protected Customer Data access in the Partner
+      # Dashboard. Keep them off until that access is granted to avoid registration
+      # errors; the scheduled bulk sync covers order updates in the meantime.
+      @order_webhooks_enabled = env["ENABLE_ORDER_WEBHOOKS"] == "true"
       @auto_sync_interval_seconds = [Integer(env["AUTO_SYNC_INTERVAL_SECONDS"] || "300", 10), 60].max
       @uninstall_cleanup_interval_seconds = [Integer(env["UNINSTALL_CLEANUP_INTERVAL_SECONDS"] || "300", 10), 60].max
       @sync_api_secret = env["SYNC_API_SECRET"].to_s
       @session_cookie_name = env["SESSION_COOKIE_NAME"] || "send_invoice_session"
+      @smtp_host = env["SMTP_HOST"].to_s
+      @smtp_port = Integer(env["SMTP_PORT"] || "587", 10)
+      @smtp_username = env["SMTP_USERNAME"].to_s
+      @smtp_password = env["SMTP_PASSWORD"].to_s
+      @smtp_authentication = (env["SMTP_AUTHENTICATION"] || "plain").to_s
+      @smtp_from_email = env["SMTP_FROM_EMAIL"].to_s
+      @smtp_from_name = env["SMTP_FROM_NAME"].to_s
+      @smtp_use_tls = env["SMTP_USE_TLS"] != "false"
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
     end
 
     def mock_mode?
       @mock_mode
+    end
+
+    def order_webhooks_enabled?
+      @order_webhooks_enabled
+    end
+
+    def smtp_configured?
+      !@smtp_host.empty? && !@smtp_from_email.empty?
     end
 
     def db_queue_backend?

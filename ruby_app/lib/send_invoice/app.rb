@@ -7,8 +7,11 @@ require "time"
 require "uri"
 require "webrick"
 
-require "send_invoice/mock_data"
 require "send_invoice/view_helpers"
+require "send_invoice/invoice_document"
+require "send_invoice/invoice_mailer"
+require "send_invoice/invoice_pdf"
+require "send_invoice/mock_data"
 
 module SendInvoice
   class App
@@ -62,7 +65,13 @@ module SendInvoice
       @response = res
       @session_id = nil
       @session = nil
+      @params = nil
       @response["Content-Type"] = "text/html; charset=utf-8"
+      # Standalone (non-embedded) app: it is never legitimately framed, so forbid
+      # all framing to prevent clickjacking. CSP covers modern browsers; the
+      # X-Frame-Options header covers older ones.
+      @response["Content-Security-Policy"] = "frame-ancestors 'none'"
+      @response["X-Frame-Options"] = "DENY"
       load_session unless webhook_request?
 
       route!
@@ -142,6 +151,14 @@ module SendInvoice
         render_orders
       when ["POST", "/orders/sync"]
         handle_manual_sync
+      when ["GET", "/orders/detail"]
+        render_order_detail
+      when ["GET", "/orders/invoice"]
+        render_order_invoice
+      when ["GET", "/orders/invoice.pdf"]
+        download_order_invoice_pdf
+      when ["POST", "/orders/send-invoice"]
+        handle_send_order_invoice
       when ["GET", "/queue-ops"]
         render_queue_ops
       when ["POST", "/queue-ops/retry-latest-failed"]
@@ -172,6 +189,10 @@ module SendInvoice
         render_support
       when ["POST", "/support"]
         handle_support_submit
+      when ["GET", "/legal/privacy"]
+        render_privacy_policy
+      when ["GET", "/legal/terms"]
+        render_terms_of_service
       when ["GET", "/api/shop"]
         api_shop
       when ["PUT", "/api/shop/email"]
@@ -281,6 +302,9 @@ module SendInvoice
         current_path: @request.path,
         shop: shop,
         sync_status: sync_status,
+        onboarding_sync_label: onboarding_sync_label(sync_status),
+        onboarding_sync_meta: onboarding_sync_meta(sync_status),
+        onboarding_sync_error_detail: onboarding_sync_error_detail(sync_status),
         onboarding_step: step,
         mock_mode: @config.mock_mode?,
         can_connect: shop || @config.mock_mode?
@@ -367,6 +391,10 @@ module SendInvoice
       result = @store.orders(shop["shop_domain"], filters)
       selected_order_id = single_value(params["order_id"])
       order = selected_order_id ? @store.order(shop["shop_domain"], selected_order_id) : nil
+      if selected_order_id && order
+        redirect_to(order_detail_path(order["id"], shop["shop_domain"]))
+        return
+      end
 
       render_page("pages/orders", {
         page_title: "Orders",
@@ -375,11 +403,22 @@ module SendInvoice
         sync_status: @sync_engine.status(shop["shop_domain"]),
         filters: filters,
         order_result: result,
-        selected_order: order,
         selected_order_id: selected_order_id,
         selected_order_missing: !selected_order_id.to_s.empty? && order.nil?,
         pagination_path: "/orders"
       })
+    end
+
+    def render_order_detail
+      shop = require_onboarded_shop
+      order = selected_order(shop)
+
+      render_page("pages/order_detail", order_detail_locals(
+        shop: shop,
+        order: order,
+        current_path: order_detail_path(order["id"], shop["shop_domain"]),
+        page_title: order["name"]
+      ))
     end
 
     def handle_manual_sync
@@ -391,6 +430,101 @@ module SendInvoice
         flash!("error", result["message"] || "Sync unavailable")
       end
       redirect_to(back_path("/orders"))
+    end
+
+    def render_order_invoice
+      shop = require_onboarded_shop
+      order = selected_order(shop)
+      document = invoice_document_for(shop, order).payload
+
+      render_page("pages/order_invoice", {
+        page_title: "Invoice #{document['invoice_number']}",
+        current_path: "/orders",
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        order: order,
+        invoice_document: document,
+        print_back_path: order_detail_path(order["id"], shop["shop_domain"])
+      }, layout: "print")
+    end
+
+    def download_order_invoice_pdf
+      shop = require_onboarded_shop
+      order = selected_order(shop)
+      document = invoice_document_for(shop, order).payload
+      pdf = InvoicePdf.new.generate(document)
+
+      @response.status = 200
+      @response["Content-Type"] = "application/pdf"
+      @response["Content-Disposition"] = "attachment; filename=\"#{invoice_document_for(shop, order).filename}\""
+      @response.body = pdf
+    end
+
+    def handle_send_order_invoice
+      shop = require_onboarded_shop
+      order = selected_order(shop)
+      draft = invoice_delivery_draft_for(shop, order)
+      recipient_email = single_value(params["recipient_email"]).to_s.strip
+      subject = single_value(params["email_subject"]).to_s.strip
+      body_text = single_value(params["email_body"]).to_s
+
+      recipient_email = draft["recipient_email"] if recipient_email.empty?
+      subject = draft["subject"] if subject.empty?
+      body_text = draft["body_text"] if body_text.strip.empty?
+
+      unless recipient_email.match?(/\A[^\s@]+@[^\s@]+\.[^\s@]+\z/)
+        flash!("error", "Enter a valid recipient email before sending the invoice.")
+        redirect_to(order_detail_path(order["id"], shop["shop_domain"]))
+        return
+      end
+
+      document_builder = invoice_document_for(shop, order)
+      pdf = InvoicePdf.new.generate(document_builder.payload)
+
+      begin
+        delivery_result = InvoiceMailer.new(@config).deliver(
+          to: recipient_email,
+          subject: subject,
+          body: body_text,
+          pdf_bytes: pdf,
+          filename: document_builder.filename,
+          reply_to: shop["owner_email"]
+        )
+        @store.create_invoice_delivery(shop["shop_domain"], order["id"], {
+          "recipient_email" => recipient_email,
+          "subject" => subject,
+          "body_text" => body_text,
+          "invoice_filename" => document_builder.filename,
+          "delivery_status" => delivery_result["status"],
+          "delivery_channel" => delivery_result["channel"],
+          "delivery_target" => delivery_result["target"],
+          "external_message_id" => delivery_result["external_message_id"],
+          "outbox_path" => delivery_result["outbox_path"],
+          "pdf_size_bytes" => pdf.bytesize,
+          "sent_at" => Time.now.utc.iso8601
+        })
+
+        if delivery_result["status"] == "outbox"
+          flash!("info", "Invoice prepared and saved to the local outbox. Configure SMTP to send directly.")
+        else
+          flash!("info", "Invoice sent to #{recipient_email}.")
+        end
+      rescue StandardError => e
+        @store.create_invoice_delivery(shop["shop_domain"], order["id"], {
+          "recipient_email" => recipient_email,
+          "subject" => subject,
+          "body_text" => body_text,
+          "invoice_filename" => document_builder.filename,
+          "delivery_status" => "failed",
+          "delivery_channel" => @config.smtp_configured? ? "smtp" : "local_outbox",
+          "delivery_target" => @config.smtp_configured? ? "#{@config.smtp_host}:#{@config.smtp_port}" : @config.outbox_path,
+          "pdf_size_bytes" => pdf.bytesize,
+          "error_message" => e.message
+        })
+        flash!("error", "Invoice delivery failed: #{e.message}")
+      end
+
+      redirect_to(order_detail_path(order["id"], shop["shop_domain"]))
     end
 
     def render_queue_ops
@@ -628,7 +762,9 @@ module SendInvoice
         current_path: @request.path,
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
-        notification_config: merged_notification_config(shop)
+        notification_config: merged_notification_config(shop),
+        invoice_delivery_mode: invoice_delivery_mode_label,
+        notification_placeholders: notification_placeholders
       })
     end
 
@@ -665,7 +801,8 @@ module SendInvoice
         page_title: "Settings",
         current_path: @request.path,
         shop: shop,
-        sync_status: @sync_engine.status(shop["shop_domain"])
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        invoice_delivery_mode: invoice_delivery_mode_label
       })
     end
 
@@ -718,6 +855,24 @@ module SendInvoice
       require_onboarded_shop
       flash!("info", "Message sent. We will get back to you within 24 hours.")
       redirect_to("/support")
+    end
+
+    def render_privacy_policy
+      render_page("pages/privacy_policy", {
+        page_title: "Privacy Policy",
+        current_path: @request.path,
+        shop: current_shop(optional: true),
+        sync_status: current_sync_status(optional: true)
+      }, layout: current_shop(optional: true)&.fetch("onboarded", false) ? "application" : "application")
+    end
+
+    def render_terms_of_service
+      render_page("pages/terms_of_service", {
+        page_title: "Terms of Service",
+        current_path: @request.path,
+        shop: current_shop(optional: true),
+        sync_status: current_sync_status(optional: true)
+      }, layout: current_shop(optional: true)&.fetch("onboarded", false) ? "application" : "application")
     end
 
     def api_shop
@@ -1099,7 +1254,11 @@ module SendInvoice
         return @store.ensure_shop(shop_domain, "shop_name" => MockData::DEMO_SHOP_NAME)
       end
 
-      return nil if optional && requested_shop.to_s.empty?
+      if requested_shop.to_s.empty?
+        fallback_shop = single_installed_shop
+        return fallback_shop if optional && fallback_shop
+        return nil if optional
+      end
       raise UnauthorizedError, "Unauthorized: missing or invalid shop domain" unless @shopify_client.valid_shop_domain?(requested_shop.to_s)
 
       shop = @store.shop(requested_shop)
@@ -1138,6 +1297,13 @@ module SendInvoice
 
     def require_shop
       current_shop(optional: false)
+    end
+
+    def single_installed_shop
+      shops = @store.syncable_shops
+      return nil unless shops.length == 1
+
+      shops.first
     end
 
     def require_onboarded_shop
@@ -1183,6 +1349,51 @@ module SendInvoice
       return existing["shop_name"] if existing && existing["shop_name"]
 
       shop_domain.split(".").first.split("-").map(&:capitalize).join(" ")
+    end
+
+    def onboarding_sync_label(sync_status)
+      sync_status["status"] == "failed" ? "Sync failed" : "Importing orders"
+    end
+
+    def onboarding_sync_meta(sync_status)
+      case sync_status["status"]
+      when "running"
+        if sync_status["firstTimeSyncStatus"] == "initial_sync_pending"
+          "Loading the latest 3 days of orders first."
+        else
+          "Syncing #{sync_status["ordersSynced"]} of #{sync_status["totalEstimated"]} orders"
+        end
+      when "completed"
+        if sync_status["fullSixMonthsSyncCompleted"] == false
+          "Recent orders are ready. Older orders will continue syncing in the background."
+        else
+          "Sync complete. Redirecting to your dashboard."
+        end
+      when "failed"
+        protected_order_access_error?(onboarding_sync_raw_error(sync_status)) ? "Shopify is blocking order access for this app." : "Something went wrong while syncing your store."
+      else
+        "Preparing your initial order sync."
+      end
+    end
+
+    def onboarding_sync_error_detail(sync_status)
+      error_message = onboarding_sync_raw_error(sync_status)
+      return nil if error_message.empty?
+      return "Enable protected customer data access for this app in Shopify Partner Dashboard, then retry the sync." if protected_order_access_error?(error_message)
+
+      error_message
+    end
+
+    def onboarding_sync_raw_error(sync_status)
+      error_message = sync_status["errorMessage"].to_s
+      return error_message unless error_message.empty?
+
+      failed_batch = Array(sync_status["batches"]).find { |batch| batch["status"] == "failed" }
+      failed_batch ? failed_batch["error_message"].to_s : ""
+    end
+
+    def protected_order_access_error?(message)
+      message.to_s.match?(/not approved to access the Order object/i)
     end
 
     def last_30_day_revenue(orders)
@@ -1242,6 +1453,49 @@ module SendInvoice
 
     def merged_notification_config(shop)
       deep_merge(MockData::DEFAULT_NOTIFICATION_CONFIG, shop["notification_config"] || {})
+    end
+
+    def invoice_document_for(shop, order)
+      InvoiceDocument.new(
+        shop: shop,
+        order: order,
+        invoice_config: merged_invoice_config(shop)
+      )
+    end
+
+    def invoice_delivery_draft_for(shop, order)
+      notification_config = merged_notification_config(shop)
+      email_config = notification_config["email"] || {}
+      document = invoice_document_for(shop, order)
+      {
+        "recipient_email" => order["customer_email"].to_s,
+        "subject" => document.render_template(email_config["subject"].to_s),
+        "body_text" => document.render_template(email_config["body"].to_s)
+      }
+    end
+
+    def invoice_delivery_mode_label
+      @config.smtp_configured? ? "smtp" : "local_outbox"
+    end
+
+    def order_detail_locals(shop:, order:, current_path:, page_title:)
+      {
+        page_title: page_title,
+        current_path: current_path,
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        selected_order: order,
+        selected_order_invoice_filename: invoice_document_for(shop, order).filename,
+        selected_order_invoice_deliveries: @store.invoice_deliveries(shop["shop_domain"], order["id"], limit: 10),
+        selected_order_invoice_document: invoice_document_for(shop, order).payload,
+        selected_order_invoice_draft: invoice_delivery_draft_for(shop, order),
+        invoice_delivery_mode: invoice_delivery_mode_label,
+        order_back_path: query_path("/orders", { "shop" => shop["shop_domain"] })
+      }
+    end
+
+    def notification_placeholders
+      %w[company shop_name name customer_name recipient_email invoice_number invoice_date due_date order_name invoice_total payment_terms]
     end
 
     def deep_merge(base, override)
@@ -1317,13 +1571,30 @@ module SendInvoice
       @session = @store.load_session(@session_id)
       return if cookie
 
-      @response.cookies << WEBrick::Cookie.new(@config.session_cookie_name, @session_id)
+      set_session_cookie
     end
 
     def persist_session
       return unless @session_id
 
       @store.save_session(@session_id, @session["shop_domain"], @session || {})
+    end
+
+    def set_session_cookie
+      cookie_parts = [
+        "#{@config.session_cookie_name}=#{@session_id}",
+        "Path=/",
+        "HttpOnly"
+      ]
+
+      if @config.host.to_s.start_with?("https://")
+        cookie_parts << "Secure"
+        cookie_parts << "SameSite=None"
+      else
+        cookie_parts << "SameSite=Lax"
+      end
+
+      @response["Set-Cookie"] = cookie_parts.join("; ")
     end
 
     def consume_flash
@@ -1347,6 +1618,30 @@ module SendInvoice
       admin_shop && admin_shop["shop_domain"] == shop["shop_domain"]
     end
 
+    def selected_order(shop)
+      order_id = single_value(params["order_id"])
+      order = order_id ? @store.order(shop["shop_domain"], order_id) : nil
+      raise NotFoundError unless order
+
+      order
+    end
+
+    def order_detail_path(order_id, shop_domain = nil)
+      query_path("/orders/detail", { "order_id" => order_id, "shop" => shop_domain })
+    end
+
+    def order_invoice_path(order_id, shop_domain = nil)
+      query_path("/orders/invoice", { "order_id" => order_id, "shop" => shop_domain })
+    end
+
+    def order_invoice_pdf_path(order_id, shop_domain = nil)
+      query_path("/orders/invoice.pdf", { "order_id" => order_id, "shop" => shop_domain })
+    end
+
+    def order_send_invoice_path(order_id, shop_domain = nil)
+      query_path("/orders/send-invoice", { "order_id" => order_id, "shop" => shop_domain })
+    end
+
     def back_path(fallback)
       referer = header_value("referer")
       return fallback unless referer
@@ -1362,7 +1657,34 @@ module SendInvoice
     end
 
     def params
-      @request.query
+      @params ||= begin
+        merged = {}
+        if @request.respond_to?(:request_uri) && @request.request_uri&.query
+          URI.decode_www_form(@request.request_uri.query).each do |key, value|
+            merged[key] = value
+          end
+        end
+        @request.query.each do |key, value|
+          merged[key] = value
+        end
+        merged.transform_values { |value| utf8_param(value) }
+      end
+    end
+
+    # WEBrick returns URL-decoded query values in ASCII-8BIT encoding. The sqlite3
+    # gem binds binary strings as BLOBs, so they never match TEXT columns (e.g. an
+    # order id looked up against orders.id). Re-tag valid byte sequences as UTF-8 so
+    # lookups behave the same as the plain Ruby strings used elsewhere.
+    def utf8_param(value)
+      case value
+      when String
+        encoded = value.dup.force_encoding(Encoding::UTF_8)
+        encoded.valid_encoding? ? encoded : value
+      when Array
+        value.map { |element| utf8_param(element) }
+      else
+        value
+      end
     end
 
     def stringified_params

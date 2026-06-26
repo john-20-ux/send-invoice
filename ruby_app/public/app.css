@@ -351,6 +351,23 @@ textarea {
   text-align: right;
 }
 
+.sync-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-banner-actions form {
+  margin: 0;
+}
+
+.sync-banner-note {
+  width: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .sync-recovery-panel {
   width: 100%;
   display: grid;
@@ -782,6 +799,18 @@ textarea {
   border-spacing: 0;
 }
 
+.row-actions {
+  display: inline-flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.row-actions .button-ghost {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .data-table th,
 .data-table td {
   padding: 10px 12px;
@@ -854,6 +883,24 @@ textarea {
 
 .order-detail-shell {
   gap: 16px;
+}
+
+.order-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.order-main-column,
+.order-side-column {
+  display: grid;
+  gap: 16px;
+}
+
+.order-side-column {
+  position: sticky;
+  top: 16px;
 }
 
 .order-summary-grid .metric-card .value {
@@ -1461,10 +1508,18 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .order-workspace {
+    grid-template-columns: 1fr;
+  }
+
   .split-layout > .section-card,
   .template-preview {
     position: static;
     max-height: none;
+  }
+
+  .order-side-column {
+    position: static;
   }
 }
 

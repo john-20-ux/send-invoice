@@ -57,10 +57,24 @@
       </form>
     </article>
   <% else %>
-    <article class="hero-card" id="onboarding-sync" data-api-path="/api/sync" data-status-path="/api/sync/status" data-complete-path="/onboarding/complete" data-autostart="true">
+    <article
+      class="hero-card"
+      id="onboarding-sync"
+      data-api-path="/api/sync"
+      data-status-path="/api/sync/status"
+      data-complete-path="/onboarding/complete"
+      data-shop-domain="<%= h(@shop && @shop["shop_domain"]) %>"
+      data-autostart="true"
+    >
       <p class="eyebrow">Step 3</p>
-      <h1 data-role="sync-label">Importing orders</h1>
-      <p data-role="sync-meta" style="margin-top:12px">Preparing your initial order sync.</p>
+      <h1 data-role="sync-label"><%= h(@onboarding_sync_label) %></h1>
+      <p data-role="sync-meta" style="margin-top:12px"><%= h(@onboarding_sync_meta) %></p>
+      <p
+        data-role="sync-error-detail"
+        class="muted"
+        style="margin-top:12px"
+        <% if @onboarding_sync_error_detail.to_s.empty? %>hidden<% end %>
+      ><%= h(@onboarding_sync_error_detail.to_s) %></p>
       <div class="sync-progress" style="width:100%;margin-top:24px">
         <span data-role="sync-progress" style="width:<%= percentage(@sync_status["ordersSynced"], @sync_status["totalEstimated"]) %>%"></span>
       </div>
