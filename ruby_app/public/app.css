@@ -110,6 +110,7 @@ textarea {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
+  transition: grid-template-columns 0.18s ease;
 }
 
 .sidebar {
@@ -172,12 +173,80 @@ textarea {
 .nav-link {
   display: flex;
   align-items: center;
+  gap: 11px;
   min-height: 36px;
   padding: 0 10px;
   border-radius: 5px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.nav-icon {
+  flex: none;
+}
+
+/* Sidebar collapse toggle */
+.sidebar-toggle {
+  position: absolute;
+  top: 15px;
+  right: 11px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-toggle:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.sidebar-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+/* Collapsed icon-rail state */
+html.nav-rail {
+  --sidebar-width: 64px;
+}
+
+html.nav-rail .brand-text,
+html.nav-rail .sidebar-footnote,
+html.nav-rail .nav-stack + .eyebrow,
+html.nav-rail .sidebar .eyebrow,
+html.nav-rail .nav-label {
+  display: none;
+}
+
+html.nav-rail .brand {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  margin-top: 38px;
+  border-bottom-color: transparent;
+}
+
+html.nav-rail .nav-link {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+
+html.nav-rail .sidebar-toggle {
+  right: 50%;
+  transform: translateX(50%);
 }
 
 .nav-link:hover {

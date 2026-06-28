@@ -4,24 +4,31 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title><%= h(@page_title || "Send Invoice") %></title>
-    <link rel="stylesheet" href="/assets/app.css?v=12">
+    <link rel="stylesheet" href="/assets/app.css?v=13">
+    <script>try{if(localStorage.getItem("si-nav-rail")==="1")document.documentElement.classList.add("nav-rail")}catch(e){}</script>
   </head>
   <body class="app-body">
     <div class="page-noise"></div>
     <% if @shop && @shop["onboarded"] %>
       <div class="app-frame">
         <aside class="sidebar">
+          <button type="button" class="sidebar-toggle" data-action="toggle-nav-rail" aria-label="Toggle sidebar" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path>
+            </svg>
+          </button>
           <a href="/dashboard" class="brand">
             <span class="brand-mark">SI</span>
-            <span>
+            <span class="brand-text">
               <strong>Send Invoice</strong>
               <small>Orders and payouts</small>
             </span>
           </a>
           <nav class="nav-stack">
             <% @nav_items.each do |item| %>
-              <a href="<%= item["path"] %>" class="nav-link <%= active_path?(@current_path, item["path"]) ? "is-active" : "" %>">
-                <span><%= h(item["label"]) %></span>
+              <a href="<%= item["path"] %>" class="nav-link <%= active_path?(@current_path, item["path"]) ? "is-active" : "" %>" aria-label="<%= h(item["label"]) %>" title="<%= h(item["label"]) %>">
+                <%= nav_icon(item["path"]) %>
+                <span class="nav-label"><%= h(item["label"]) %></span>
               </a>
             <% end %>
           </nav>
@@ -29,8 +36,9 @@
             <p class="eyebrow">Admin</p>
             <nav class="nav-stack">
               <% @admin_nav_items.each do |item| %>
-                <a href="<%= item["path"] %>" class="nav-link <%= active_path?(@current_path, item["path"]) ? "is-active" : "" %>">
-                  <span><%= h(item["label"]) %></span>
+                <a href="<%= item["path"] %>" class="nav-link <%= active_path?(@current_path, item["path"]) ? "is-active" : "" %>" aria-label="<%= h(item["label"]) %>" title="<%= h(item["label"]) %>">
+                  <%= nav_icon(item["path"]) %>
+                  <span class="nav-label"><%= h(item["label"]) %></span>
                 </a>
               <% end %>
             </nav>
@@ -82,6 +90,6 @@
       </main>
     <% end %>
 
-    <script src="/assets/app.js?v=12"></script>
+    <script src="/assets/app.js?v=13"></script>
   </body>
 </html>

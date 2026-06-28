@@ -916,8 +916,36 @@
     Array.prototype.forEach.call(roots, setupOne);
   }
 
+  // Collapsible sidebar (icon rail). State persists in localStorage; the
+  // initial class is applied by an inline <head> script to avoid a flash.
+  function bootNavRail() {
+    var KEY = "si-nav-rail";
+    var toggle = $('[data-action="toggle-nav-rail"]');
+
+    function syncToggle() {
+      if (!toggle) return;
+      var railed = document.documentElement.classList.contains("nav-rail");
+      toggle.setAttribute("aria-expanded", railed ? "false" : "true");
+      toggle.setAttribute("title", railed ? "Expand sidebar" : "Collapse sidebar");
+    }
+
+    syncToggle();
+
+    document.addEventListener("click", function (event) {
+      if (!event.target.closest('[data-action="toggle-nav-rail"]')) return;
+      var railed = document.documentElement.classList.toggle("nav-rail");
+      try {
+        localStorage.setItem(KEY, railed ? "1" : "0");
+      } catch (_error) {
+        // Ignore storage failures (private mode, etc.).
+      }
+      syncToggle();
+    });
+  }
+
   bootSyncPolling();
   bootOnboardingSync();
   bootInvoicePreview();
   bootDateRangePicker();
+  bootNavRail();
 })();
