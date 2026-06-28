@@ -669,8 +669,9 @@ textarea {
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 8px;
-  align-items: end;
-  min-height: 180px;
+  align-items: stretch;
+  /* A definite height is required so the bars' percentage heights resolve. */
+  height: 200px;
   margin-top: 14px;
   padding-top: 8px;
 }
@@ -681,13 +682,17 @@ textarea {
 
 .chart-column {
   display: grid;
+  /* value (top) · flexible plot area · caption (bottom) */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   align-items: end;
   gap: 6px;
   min-width: 0;
+  height: 100%;
 }
 
 .chart-bar {
-  min-height: 8px;
+  width: 100%;
+  min-height: 4px;
   border-radius: 3px 3px 0 0;
   background: var(--blue);
 }
