@@ -46,6 +46,34 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Thin, minimal scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d0d0d0 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #d4d4d4;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #b8b8b8;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 h1,
 h2,
 h3,
