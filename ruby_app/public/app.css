@@ -791,47 +791,86 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 7px;
   min-height: 36px;
-  padding: 0 12px;
+  padding: 0 15px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 13px;
-  font-weight: 720;
+  font-weight: 600;
   white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.04s ease;
 }
 
+.button:active,
+.button-secondary:active,
+.button-ghost:active,
+.button-danger:active {
+  transform: translateY(1px);
+}
+
+.button:focus-visible,
+.button-secondary:focus-visible,
+.button-ghost:focus-visible,
+.button-danger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+/* Primary: green outline at rest, fills green on hover. */
 .button {
-  color: #ffffff;
-  background: var(--accent);
+  color: var(--accent);
+  background: #ffffff;
   border-color: var(--accent);
 }
 
 .button:hover {
-  background: #0f6e58;
+  color: #ffffff;
+  background: var(--accent);
 }
 
+/* Secondary: ink outline at rest, fills ink on hover. */
 .button-secondary {
-  color: var(--accent);
-  background: var(--accent-weak);
-  border-color: #cce7dd;
+  color: var(--text);
+  background: #ffffff;
+  border-color: var(--line-strong);
 }
 
+.button-secondary:hover {
+  color: #ffffff;
+  background: var(--text);
+  border-color: var(--text);
+}
+
+/* Ghost: quiet hairline; darkens on hover. */
 .button-ghost {
-  color: var(--text);
+  color: var(--muted);
   background: #ffffff;
   border-color: var(--line);
 }
 
-.button-ghost:hover,
-.button-secondary:hover {
-  border-color: #b8c1cc;
+.button-ghost:hover {
+  color: var(--text);
+  border-color: #cfcfcf;
 }
 
+/* Danger: red outline at rest, fills red on hover. */
 .button-danger {
+  color: var(--red);
+  background: #ffffff;
+  border-color: #f1c9c3;
+}
+
+.button-danger:hover {
   color: #ffffff;
   background: var(--red);
   border-color: var(--red);
+}
+
+.button-danger:focus-visible {
+  box-shadow: 0 0 0 3px var(--red-weak);
 }
 
 .table-shell {
