@@ -559,6 +559,11 @@ textarea {
   gap: 8px;
 }
 
+/* Bottom-align filter buttons with the inputs (whose labels add height above). */
+.filter-actions {
+  align-self: end;
+}
+
 .stack {
   display: grid;
   gap: 12px;
@@ -1609,5 +1614,270 @@ textarea {
     position: static;
     box-shadow: none;
     border: 0;
+  }
+}
+
+/* Date range picker */
+[data-date-range] {
+  position: relative;
+}
+
+.date-range-native {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* JS hides the native fallback once the rich picker mounts; an explicit
+   display rule above otherwise overrides the [hidden] attribute. */
+.date-range-native[hidden] {
+  display: none;
+}
+
+.date-range-native input {
+  flex: 1;
+}
+
+.date-range-native-sep {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.date-range-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.date-range-trigger:hover {
+  border-color: var(--accent);
+}
+
+.date-range-trigger[aria-expanded="true"] {
+  outline: 2px solid rgba(20, 124, 100, 0.16);
+  border-color: var(--accent);
+}
+
+.date-range-trigger-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.date-range-trigger-label {
+  flex: 1;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.date-range-trigger.has-value .date-range-trigger-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.date-range-popover[hidden] {
+  display: none;
+}
+
+.date-range-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.date-range-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 12px;
+  margin-right: 12px;
+  border-right: 1px solid var(--line-soft, var(--line));
+}
+
+.date-range-preset {
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.date-range-preset:hover {
+  background: var(--bg);
+}
+
+.date-range-preset.is-active {
+  color: var(--accent);
+  background: var(--accent-weak);
+  font-weight: 600;
+}
+
+.date-range-main {
+  position: relative;
+}
+
+.date-range-nav {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 4px;
+}
+
+.date-range-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.date-range-nav-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.date-range-calendars {
+  display: flex;
+  gap: 20px;
+}
+
+.date-range-cal-head {
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.date-range-cal-title {
+  font-size: 13px;
+  font-weight: 720;
+  color: var(--text);
+}
+
+.date-range-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 32px);
+  gap: 2px;
+}
+
+.date-range-weekday {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--faint, var(--muted));
+}
+
+.date-range-day {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.date-range-day.is-empty {
+  cursor: default;
+}
+
+.date-range-day:not(.is-empty):hover {
+  background: var(--accent-weak);
+}
+
+.date-range-day.is-today {
+  font-weight: 720;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.date-range-day.is-in-range {
+  background: var(--accent-weak);
+  border-radius: 0;
+}
+
+.date-range-day.is-start,
+.date-range-day.is-end {
+  color: #ffffff;
+  background: var(--accent);
+  font-weight: 700;
+}
+
+.date-range-day.is-start {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.date-range-day.is-end {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.date-range-day.is-start.is-end {
+  border-radius: var(--radius-sm);
+}
+
+.date-range-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft, var(--line));
+}
+
+@media (max-width: 720px) {
+  .date-range-popover {
+    flex-direction: column;
+  }
+
+  .date-range-presets {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-right: 0;
+    margin-right: 0;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft, var(--line));
+  }
+
+  .date-range-calendars {
+    flex-direction: column;
   }
 }

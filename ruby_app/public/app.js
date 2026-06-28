@@ -619,7 +619,303 @@
     renderLineItems();
   }
 
+  function bootDateRangePicker() {
+    var MONTHS = ["January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"];
+    var MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+    function pad(value) {
+      return value < 10 ? "0" + value : String(value);
+    }
+
+    // Parse/format plain YYYY-MM-DD strings without timezone drift.
+    function parseDate(value) {
+      if (!value) return null;
+      var parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+      if (!parts) return null;
+      return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+    }
+
+    function formatDate(date) {
+      return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+    }
+
+    function formatLabel(date) {
+      return MONTHS_SHORT[date.getMonth()] + " " + date.getDate() + ", " + date.getFullYear();
+    }
+
+    function startOfDay(date) {
+      return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    }
+
+    function addDays(date, days) {
+      var next = startOfDay(date);
+      next.setDate(next.getDate() + days);
+      return next;
+    }
+
+    function sameDay(a, b) {
+      return a && b && a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    }
+
+    function setupOne(root) {
+      var fromInput = root.querySelector('input[name="from"]');
+      var toInput = root.querySelector('input[name="to"]');
+      if (!fromInput || !toInput) return;
+      var form = root.closest("form");
+
+      var state = {
+        from: parseDate(fromInput.value),
+        to: parseDate(toInput.value),
+        view: null
+      };
+      state.view = startOfDay(state.from || state.to || new Date());
+      state.view.setDate(1);
+
+      // Inline style hides the native fallback regardless of stylesheet caching.
+      var native = root.querySelector(".date-range-native");
+      if (native) native.style.display = "none";
+
+      var trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "date-range-trigger";
+      trigger.setAttribute("aria-haspopup", "dialog");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.innerHTML =
+        '<span class="date-range-trigger-icon" aria-hidden="true">' +
+        '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6">' +
+        '<rect x="3" y="4" width="14" height="13" rx="2"></rect>' +
+        '<path d="M3 8h14M7 2.5v3M13 2.5v3" stroke-linecap="round"></path></svg></span>' +
+        '<span class="date-range-trigger-label"></span>';
+
+      var popover = document.createElement("div");
+      popover.className = "date-range-popover";
+      popover.setAttribute("role", "dialog");
+      popover.hidden = true;
+
+      root.appendChild(trigger);
+      root.appendChild(popover);
+
+      var presets = [
+        { key: "today", label: "Today", range: function () { var t = startOfDay(new Date()); return [t, t]; } },
+        { key: "yesterday", label: "Yesterday", range: function () { var y = addDays(new Date(), -1); return [y, y]; } },
+        { key: "last7", label: "Last 7 days", range: function () { var t = startOfDay(new Date()); return [addDays(t, -6), t]; } },
+        { key: "last30", label: "Last 30 days", range: function () { var t = startOfDay(new Date()); return [addDays(t, -29), t]; } },
+        { key: "thisMonth", label: "This month", range: function () { var n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), startOfDay(n)]; } },
+        { key: "lastMonth", label: "Last month", range: function () { var n = new Date(); return [new Date(n.getFullYear(), n.getMonth() - 1, 1), new Date(n.getFullYear(), n.getMonth(), 0)]; } },
+        { key: "thisYear", label: "This year", range: function () { var n = new Date(); return [new Date(n.getFullYear(), 0, 1), startOfDay(n)]; } }
+      ];
+
+      function updateTrigger() {
+        var label = trigger.querySelector(".date-range-trigger-label");
+        if (state.from && state.to) {
+          label.textContent = sameDay(state.from, state.to)
+            ? formatLabel(state.from)
+            : formatLabel(state.from) + " – " + formatLabel(state.to);
+          trigger.classList.add("has-value");
+        } else if (state.from) {
+          label.textContent = "From " + formatLabel(state.from);
+          trigger.classList.add("has-value");
+        } else if (state.to) {
+          label.textContent = "Until " + formatLabel(state.to);
+          trigger.classList.add("has-value");
+        } else {
+          label.textContent = "All dates";
+          trigger.classList.remove("has-value");
+        }
+      }
+
+      function syncInputs() {
+        fromInput.value = state.from ? formatDate(state.from) : "";
+        toInput.value = state.to ? formatDate(state.to) : "";
+      }
+
+      // Push current selection into the hidden inputs and refresh the trigger label.
+      function commit() {
+        syncInputs();
+        updateTrigger();
+      }
+
+      function buildMonth(base) {
+        var year = base.getFullYear();
+        var month = base.getMonth();
+        var wrap = document.createElement("div");
+        wrap.className = "date-range-cal";
+
+        var head = document.createElement("div");
+        head.className = "date-range-cal-head";
+        var title = document.createElement("span");
+        title.className = "date-range-cal-title";
+        title.textContent = MONTHS[month] + " " + year;
+        head.appendChild(title);
+        wrap.appendChild(head);
+
+        var grid = document.createElement("div");
+        grid.className = "date-range-grid";
+        WEEKDAYS.forEach(function (day) {
+          var cell = document.createElement("span");
+          cell.className = "date-range-weekday";
+          cell.textContent = day;
+          grid.appendChild(cell);
+        });
+
+        var firstDay = new Date(year, month, 1);
+        // Monday-first column offset.
+        var lead = (firstDay.getDay() + 6) % 7;
+        var daysInMonth = new Date(year, month + 1, 0).getDate();
+        var today = startOfDay(new Date());
+
+        for (var i = 0; i < lead; i++) {
+          var blank = document.createElement("span");
+          blank.className = "date-range-day is-empty";
+          grid.appendChild(blank);
+        }
+
+        for (var d = 1; d <= daysInMonth; d++) {
+          var current = new Date(year, month, d);
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "date-range-day";
+          btn.textContent = String(d);
+          btn.dataset.date = formatDate(current);
+
+          if (sameDay(current, today)) btn.classList.add("is-today");
+          if (sameDay(current, state.from)) btn.classList.add("is-start");
+          if (sameDay(current, state.to)) btn.classList.add("is-end");
+          if (state.from && state.to && current > state.from && current < state.to) {
+            btn.classList.add("is-in-range");
+          }
+          grid.appendChild(btn);
+        }
+
+        wrap.appendChild(grid);
+        return wrap;
+      }
+
+      function renderCalendars() {
+        var body = popover.querySelector(".date-range-calendars");
+        body.innerHTML = "";
+        var second = new Date(state.view.getFullYear(), state.view.getMonth() + 1, 1);
+        body.appendChild(buildMonth(state.view));
+        body.appendChild(buildMonth(second));
+      }
+
+      function renderPresets() {
+        presets.forEach(function (preset) {
+          var btn = popover.querySelector('[data-preset="' + preset.key + '"]');
+          if (!btn) return;
+          var range = preset.range();
+          btn.classList.toggle("is-active",
+            sameDay(state.from, range[0]) && sameDay(state.to, range[1]));
+        });
+      }
+
+      function render() {
+        renderCalendars();
+        renderPresets();
+      }
+
+      var presetHtml = presets.map(function (preset) {
+        return '<button type="button" class="date-range-preset" data-preset="' +
+          preset.key + '">' + preset.label + "</button>";
+      }).join("");
+
+      popover.innerHTML =
+        '<div class="date-range-presets">' + presetHtml + "</div>" +
+        '<div class="date-range-main">' +
+        '<div class="date-range-nav">' +
+        '<button type="button" class="date-range-nav-btn" data-nav="prev" aria-label="Previous month">‹</button>' +
+        '<button type="button" class="date-range-nav-btn" data-nav="next" aria-label="Next month">›</button>' +
+        "</div>" +
+        '<div class="date-range-calendars"></div>' +
+        "</div>";
+
+      render();
+
+      function open() {
+        popover.hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        render();
+        document.addEventListener("click", onOutside, true);
+        document.addEventListener("keydown", onKeydown);
+      }
+
+      function close() {
+        popover.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        document.removeEventListener("click", onOutside, true);
+        document.removeEventListener("keydown", onKeydown);
+      }
+
+      function onOutside(event) {
+        if (!root.contains(event.target)) close();
+      }
+
+      function onKeydown(event) {
+        if (event.key === "Escape") close();
+      }
+
+      trigger.addEventListener("click", function () {
+        if (popover.hidden) open();
+        else close();
+      });
+
+      popover.addEventListener("click", function (event) {
+        var nav = event.target.closest("[data-nav]");
+        if (nav) {
+          var delta = nav.dataset.nav === "prev" ? -1 : 1;
+          state.view = new Date(state.view.getFullYear(), state.view.getMonth() + delta, 1);
+          render();
+          return;
+        }
+
+        var preset = event.target.closest("[data-preset]");
+        if (preset) {
+          var match = presets.filter(function (item) { return item.key === preset.dataset.preset; })[0];
+          if (match) {
+            var range = match.range();
+            state.from = range[0];
+            state.to = range[1];
+            state.view = startOfDay(state.from);
+            state.view.setDate(1);
+            commit();
+            // A preset always yields a full range, so close immediately.
+            close();
+          }
+          return;
+        }
+
+        var day = event.target.closest(".date-range-day");
+        if (day && !day.classList.contains("is-empty")) {
+          var picked = parseDate(day.dataset.date);
+          if (!state.from || state.to || picked < state.from) {
+            // Begin a new range.
+            state.from = picked;
+            state.to = null;
+            commit();
+            render();
+          } else {
+            // Complete the range, then close.
+            state.to = picked;
+            commit();
+            close();
+          }
+          return;
+        }
+      });
+
+      updateTrigger();
+    }
+
+    var roots = document.querySelectorAll("[data-date-range]");
+    Array.prototype.forEach.call(roots, setupOne);
+  }
+
   bootSyncPolling();
   bootOnboardingSync();
   bootInvoicePreview();
+  bootDateRangePicker();
 })();
