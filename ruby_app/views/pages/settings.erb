@@ -1,5 +1,4 @@
 <section class="section-card">
-  <p class="eyebrow">Preferences</p>
   <h2>Invoice defaults</h2>
   <p class="section-note">Default tax, currency, and invoice typography.</p>
 
@@ -32,7 +31,6 @@
 
 <div class="grid-two">
   <section class="section-card">
-    <p class="eyebrow">Delivery</p>
     <h2>Invoice sending</h2>
     <p class="section-note">
       <% if @invoice_delivery_mode == "smtp" %>
@@ -47,7 +45,6 @@
   </section>
 
   <section class="section-card">
-    <p class="eyebrow">Automation</p>
     <h2>Notifications</h2>
     <p class="section-note">Configure email, WhatsApp, Slack, and Basecamp delivery rules.</p>
     <div class="button-inline" style="margin-top:18px">
@@ -56,7 +53,6 @@
   </section>
 
   <section class="section-card">
-    <p class="eyebrow">Billing</p>
     <h2>Plan and trial</h2>
     <p class="section-note">You are currently on the <strong><%= h(@shop["current_plan"].capitalize) %></strong> plan.</p>
     <div class="button-inline" style="margin-top:18px">
@@ -65,7 +61,6 @@
   </section>
 
   <section class="section-card">
-    <p class="eyebrow">Trust</p>
     <h2>Policies</h2>
     <p class="section-note">Use these public pages for app review, merchant trust, and support references.</p>
     <div class="button-inline" style="margin-top:18px">

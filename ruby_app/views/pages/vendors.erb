@@ -1,14 +1,9 @@
-<form method="post" action="/vendors" class="stack">
+<div class="stack">
   <section class="section-card">
     <div class="toolbar">
       <div>
-        <p class="eyebrow">Payout desk</p>
         <h2>Vendor payouts</h2>
         <p class="section-note">Review revenue, commission, deductions, and net payable by vendor.</p>
-      </div>
-      <div class="button-inline">
-        <button class="button" type="submit">Save</button>
-        <span class="pill pill-muted">Printable payout sheets</span>
       </div>
     </div>
   </section>
@@ -34,19 +29,12 @@
           <% @vendor_summaries.each do |vendor| %>
             <% slug = slugify(vendor["name"]) %>
             <tr>
-              <td>
-                <strong><%= h(vendor["name"]) %></strong>
-                <input type="hidden" name="vendor_name__<%= slug %>" value="<%= h(vendor["name"]) %>">
-              </td>
+              <td><strong><%= h(vendor["name"]) %></strong></td>
               <td class="align-right"><%= vendor["total_orders"] %></td>
               <td class="align-right"><%= format_money(vendor["total_revenue"], "USD") %></td>
-              <td class="align-right">
-                <input type="number" step="0.5" min="0" name="rate__<%= slug %>" value="<%= vendor["commission_rate"] %>">
-              </td>
+              <td class="align-right"><%= vendor["commission_rate"] %>%</td>
               <td class="align-right"><%= format_money(vendor["total_commission"], "USD") %></td>
-              <td class="align-right">
-                <input type="number" step="0.5" min="0" name="deductions__<%= slug %>" value="<%= vendor["custom_deductions"] %>">
-              </td>
+              <td class="align-right"><%= format_money(vendor["custom_deductions"], "USD") %></td>
               <td class="align-right"><strong><%= format_money(vendor["net_payable"], "USD") %></strong></td>
               <td><a class="button-ghost" href="/vendors/<%= slug %>/invoice">Open payout sheet</a></td>
             </tr>
@@ -55,4 +43,4 @@
       </table>
     <% end %>
   </section>
-</form>
+</div>

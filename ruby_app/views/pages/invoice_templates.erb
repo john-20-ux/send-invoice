@@ -43,14 +43,12 @@
 <form method="post" action="/invoice-templates" id="invoice-template-form" class="split-layout">
   <section class="section-card stack invoice-editor-shell">
     <div>
-      <p class="eyebrow">Studio</p>
       <h2>Invoice template</h2>
       <p class="section-note">Switch styles, tune layout controls, and see the invoice update live before you save.</p>
     </div>
 
     <section class="preview-card stack">
       <div>
-        <p class="eyebrow">Template family</p>
         <h3>Style presets</h3>
       </div>
       <div class="template-preset-grid">
@@ -78,7 +76,6 @@
 
     <section class="preview-card stack">
       <div>
-        <p class="eyebrow">Brand</p>
         <h3>Visual controls</h3>
       </div>
       <div class="style-tool-grid">
@@ -133,7 +130,6 @@
 
     <section class="preview-card stack">
       <div>
-        <p class="eyebrow">Content</p>
         <h3>Document fields</h3>
       </div>
 
@@ -178,7 +174,6 @@
 
     <section class="preview-card stack">
       <div>
-        <p class="eyebrow">Visibility</p>
         <h3>Show or hide sections</h3>
       </div>
       <% {
@@ -204,7 +199,6 @@
 
     <section class="preview-card stack">
       <div>
-        <p class="eyebrow">Charges</p>
         <h3>Line items</h3>
       </div>
       <% line_items.each_with_index do |line_item, index| %>
@@ -243,6 +237,7 @@
     </section>
 
     <div class="button-inline" style="justify-content:flex-end">
+      <a class="button-ghost" href="/invoice-templates">Cancel</a>
       <button class="button" type="submit">Save</button>
     </div>
   </section>
