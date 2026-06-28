@@ -97,7 +97,9 @@
       return;
     }
 
-    if (status.lastSyncedAt) {
+    // Sync has settled. Hide the banner for merchants; admins keep it visible
+    // so the background-request recovery tools remain reachable.
+    if (status.lastSyncedAt && banner.dataset.asyncEnabled === "true") {
       banner.classList.remove("is-hidden");
       text('[data-role="status-label"]', "Last synced " + timeAgo(status.lastSyncedAt), banner);
       text('[data-role="status-meta"]', "Shopify data is ready.", banner);

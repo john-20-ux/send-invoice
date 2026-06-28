@@ -28,12 +28,17 @@
 <section class="detail-panel order-detail-shell">
   <div class="toolbar">
     <div>
+      <a class="back-link" href="<%= h(@order_back_path) %>">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10 3 5 8l5 5"></path>
+        </svg>
+        Back to orders
+      </a>
       <p class="eyebrow">Shopify order</p>
       <h2><%= h(@selected_order["name"]) %></h2>
       <p class="section-note"><%= h(@selected_order["id"]) %></p>
     </div>
     <div class="button-inline">
-      <a class="button-ghost" href="<%= h(@order_back_path) %>">Back to orders</a>
       <a class="button-ghost" href="<%= order_invoice_path(@selected_order["id"], @shop["shop_domain"]) %>" target="_blank" rel="noreferrer">Preview invoice</a>
       <a class="button-ghost" href="<%= order_invoice_pdf_path(@selected_order["id"], @shop["shop_domain"]) %>">Download PDF</a>
       <span class="<%= badge_class(@selected_order["financial_status"]) %>"><%= h(@selected_order["financial_status"]) %></span>

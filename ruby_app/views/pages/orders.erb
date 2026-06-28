@@ -23,7 +23,7 @@
     </form>
   </div>
 
-  <form method="get" action="/orders" class="grid-three" style="margin-top:20px">
+  <form method="get" action="/orders" class="orders-filters" style="margin-top:20px">
     <div class="field">
       <label for="search">Search</label>
       <input id="search" type="text" name="search" value="<%= h(@filters[:search]) %>" placeholder="Name, order, email">
@@ -35,6 +35,24 @@
         <span class="date-range-native-sep">to</span>
         <input id="to" type="date" name="to" value="<%= h(@filters[:to]) %>" aria-label="To date">
       </div>
+    </div>
+    <div class="field">
+      <label for="financial_status">Payment status</label>
+      <select id="financial_status" name="financial_status">
+        <option value="">All payments</option>
+        <% @status_options["financial"].each do |status| %>
+          <option value="<%= h(status) %>" <%= "selected" if @filters[:financial_status] == status %>><%= h(humanize_status(status)) %></option>
+        <% end %>
+      </select>
+    </div>
+    <div class="field">
+      <label for="fulfillment_status">Fulfillment status</label>
+      <select id="fulfillment_status" name="fulfillment_status">
+        <option value="">All fulfillment</option>
+        <% @status_options["fulfillment"].each do |status| %>
+          <option value="<%= h(status) %>" <%= "selected" if @filters[:fulfillment_status] == status %>><%= h(humanize_status(status)) %></option>
+        <% end %>
+      </select>
     </div>
     <div class="button-inline filter-actions">
       <button class="button" type="submit">Apply</button>
@@ -95,6 +113,8 @@
           "search" => @filters[:search],
           "from" => @filters[:from],
           "to" => @filters[:to],
+          "financial_status" => @filters[:financial_status],
+          "fulfillment_status" => @filters[:fulfillment_status],
           "page" => @order_result["page"] - 1
         }) %>">Previous</a>
       <% end %>
@@ -103,6 +123,8 @@
           "search" => @filters[:search],
           "from" => @filters[:from],
           "to" => @filters[:to],
+          "financial_status" => @filters[:financial_status],
+          "fulfillment_status" => @filters[:fulfillment_status],
           "page" => @order_result["page"] + 1
         }) %>">Next</a>
       <% end %>

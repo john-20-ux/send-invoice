@@ -1,4 +1,8 @@
-<% hidden = @sync_status["status"] == "idle" && !@sync_status["lastSyncedAt"] %>
+<% sync_active = %w[running queued failed].include?(@sync_status["status"]) %>
+<% # Only surface the banner while a sync is active or failed. Once it has
+   # settled (completed/idle), hide it for merchants; admins keep it so the
+   # background-request recovery tools stay reachable. %>
+<% hidden = !sync_active && !@queue_ops_admin %>
 <% progress = percentage(@sync_status["ordersSynced"], @sync_status["totalEstimated"]) %>
 <% sync_error = @sync_status["errorMessage"].to_s %>
 <% protected_access_blocked = sync_error.match?(/not approved to access the Order object|not approved to subscribe to webhook topics containing protected customer data/i) %>

@@ -587,6 +587,22 @@ module SendInvoice
         4.times { values << needle }
       end
 
+      if present?(filters[:financial_status])
+        clauses << "financial_status = ?"
+        values << filters[:financial_status].to_s
+      end
+
+      if present?(filters[:fulfillment_status])
+        if filters[:fulfillment_status].to_s == "UNFULFILLED"
+          # Unfulfilled orders may store NULL/blank rather than the literal.
+          clauses << "(fulfillment_status = ? OR fulfillment_status IS NULL OR fulfillment_status = '')"
+          values << "UNFULFILLED"
+        else
+          clauses << "fulfillment_status = ?"
+          values << filters[:fulfillment_status].to_s
+        end
+      end
+
       where = clauses.join(" AND ")
       offset = (page - 1) * limit
 
@@ -599,6 +615,24 @@ module SendInvoice
           "page" => page,
           "limit" => limit,
           "total_pages" => (total.to_f / limit).ceil
+        }
+      end
+    end
+
+    # Distinct status values present in this shop's orders, for filter dropdowns.
+    def order_status_options(shop_domain)
+      @database.with_connection do |db|
+        financial = db.execute(
+          "SELECT DISTINCT financial_status FROM orders WHERE shop_domain = ? AND financial_status IS NOT NULL AND financial_status != '' ORDER BY financial_status",
+          [shop_domain]
+        ).map { |row| row["financial_status"] }
+        fulfillment = db.execute(
+          "SELECT DISTINCT fulfillment_status FROM orders WHERE shop_domain = ? AND fulfillment_status IS NOT NULL AND fulfillment_status != '' ORDER BY fulfillment_status",
+          [shop_domain]
+        ).map { |row| row["fulfillment_status"] }
+        {
+          "financial" => financial.compact,
+          "fulfillment" => (fulfillment.compact + ["UNFULFILLED"]).uniq.sort
         }
       end
     end

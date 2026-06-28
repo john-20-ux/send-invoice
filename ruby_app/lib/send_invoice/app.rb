@@ -386,7 +386,9 @@ module SendInvoice
         to: single_value(params["to"]),
         page: single_value(params["page"]) || 1,
         limit: single_value(params["limit"]) || 25,
-        search: single_value(params["search"])
+        search: single_value(params["search"]),
+        financial_status: single_value(params["financial_status"]),
+        fulfillment_status: single_value(params["fulfillment_status"])
       }
       result = @store.orders(shop["shop_domain"], filters)
       selected_order_id = single_value(params["order_id"])
@@ -402,6 +404,7 @@ module SendInvoice
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
         filters: filters,
+        status_options: @store.order_status_options(shop["shop_domain"]),
         order_result: result,
         selected_order_id: selected_order_id,
         selected_order_missing: !selected_order_id.to_s.empty? && order.nil?,

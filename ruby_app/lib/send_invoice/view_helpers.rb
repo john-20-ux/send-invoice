@@ -78,6 +78,10 @@ module SendInvoice
       end
     end
 
+    def humanize_status(status)
+      status.to_s.split(/[_\s]+/).reject(&:empty?).map(&:capitalize).join(" ")
+    end
+
     def flash_class(type)
       case type.to_s
       when "error"

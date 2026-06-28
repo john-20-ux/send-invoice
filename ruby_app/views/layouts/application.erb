@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title><%= h(@page_title || "Send Invoice") %></title>
-    <link rel="stylesheet" href="/assets/app.css?v=8">
+    <link rel="stylesheet" href="/assets/app.css?v=12">
   </head>
   <body class="app-body">
     <div class="page-noise"></div>
@@ -46,16 +46,6 @@
           <% if @current_path == "/dashboard" || @current_path.to_s.start_with?("/orders") %>
             <%= render_partial("sync_banner", shop: @shop, sync_status: @sync_status) %>
           <% end %>
-          <header class="topbar">
-            <div>
-              <p class="eyebrow"><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></p>
-              <h1 class="topbar-title"><%= h(@page_title || "Overview") %></h1>
-            </div>
-            <div class="topbar-meta">
-              <span class="pill"><%= h(@shop["current_plan"].capitalize) %> plan</span>
-              <span class="pill pill-muted"><%= h(@shop["owner_email"] || "No email yet") %></span>
-            </div>
-          </header>
 
           <% if @flash %>
             <div class="<%= flash_class(@flash["type"]) %>">
@@ -92,6 +82,6 @@
       </main>
     <% end %>
 
-    <script src="/assets/app.js?v=8"></script>
+    <script src="/assets/app.js?v=12"></script>
   </body>
 </html>
