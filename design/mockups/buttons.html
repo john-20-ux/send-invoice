@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --ink:#0a0a0a; --muted:#6b6b6b; --faint:#9a9a9a; --line:#e6e6e6; --line-strong:#1a1a1a;
+    --green:#147c64; --green-dark:#0f6e58; --green-weak:#e7f4ef; --green-line:#cce7dd; --hover:#f6f6f6;
+    --red:#b42318; --red-weak:#fdf1ef;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Inter",-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:#fff;font-size:13px;-webkit-font-smoothing:antialiased;padding:40px 48px}
+  h1{font-size:24px;font-weight:680;letter-spacing:-.03em;margin-bottom:4px}
+  .lede{color:var(--muted);margin-bottom:30px;max-width:620px}
+  .opt{border:1px solid var(--line);border-radius:10px;padding:22px 24px;margin-bottom:18px}
+  .opt-h{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .opt-h .tag{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--green);border:1px solid var(--green-line);background:var(--green-weak);border-radius:5px;padding:2px 8px}
+  .opt-h h2{font-size:15px;font-weight:660}
+  .opt p{color:var(--muted);margin-bottom:16px;max-width:640px}
+  .row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
+  .row .lab{width:74px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);font-weight:600}
+
+  /* shared button base */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:0 15px;
+       font:inherit;font-size:13px;font-weight:600;border-radius:7px;border:1px solid transparent;cursor:pointer;
+       white-space:nowrap;transition:background .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .04s ease}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:none;box-shadow:0 0 0 3px var(--green-weak)}
+  .btn .ico{width:14px;height:14px;display:inline-flex}
+
+  /* ---------- OPTION 1: Solid (refined) ---------- */
+  .o1 .pri{background:var(--green);color:#fff;border-color:var(--green)}
+  .o1 .pri:hover,.o1 .pri.hv{background:var(--green-dark);border-color:var(--green-dark)}
+  .o1 .sec{background:var(--green-weak);color:var(--green);border-color:var(--green-line)}
+  .o1 .sec:hover,.o1 .sec.hv{background:#dcefe4}
+  .o1 .gho{background:#fff;color:var(--ink);border-color:var(--line)}
+  .o1 .gho:hover,.o1 .gho.hv{background:var(--hover);border-color:#cfcfcf}
+
+  /* ---------- OPTION 2: Soft tint (minimal green) ---------- */
+  .o2 .pri{background:var(--green-weak);color:var(--green);border-color:transparent}
+  .o2 .pri:hover,.o2 .pri.hv{background:#dcefe4;border-color:var(--green-line)}
+  .o2 .sec{background:#fff;color:var(--ink);border-color:var(--line)}
+  .o2 .sec:hover,.o2 .sec.hv{background:var(--hover)}
+  .o2 .gho{background:transparent;color:var(--muted);border-color:transparent}
+  .o2 .gho:hover,.o2 .gho.hv{background:var(--hover);color:var(--ink)}
+
+  /* ---------- OPTION 3: Outline-fill (interactive) ---------- */
+  .o3 .pri{background:#fff;color:var(--green);border-color:var(--green)}
+  .o3 .pri:hover,.o3 .pri.hv{background:var(--green);color:#fff}
+  .o3 .sec{background:#fff;color:var(--ink);border-color:var(--line-strong)}
+  .o3 .sec:hover,.o3 .sec.hv{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .o3 .gho{background:#fff;color:var(--muted);border-color:var(--line)}
+  .o3 .gho:hover,.o3 .gho.hv{color:var(--ink);border-color:#cfcfcf}
+
+  /* ---------- OPTION 4: Mono ink, green on hover ---------- */
+  .o4 .pri{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .o4 .pri:hover,.o4 .pri.hv{background:var(--green);border-color:var(--green)}
+  .o4 .sec{background:#fff;color:var(--ink);border-color:var(--line-strong)}
+  .o4 .sec:hover,.o4 .sec.hv{color:var(--green);border-color:var(--green)}
+  .o4 .gho{background:#fff;color:var(--muted);border-color:var(--line)}
+  .o4 .gho:hover,.o4 .gho.hv{background:var(--hover);color:var(--ink)}
+
+  /* ---------- OPTION 5: Soft pill ---------- */
+  .o5 .btn{border-radius:999px;padding:0 18px}
+  .o5 .pri{background:var(--green);color:#fff;border-color:var(--green)}
+  .o5 .pri:hover,.o5 .pri.hv{background:var(--green-dark);box-shadow:0 2px 8px rgba(20,124,100,.22)}
+  .o5 .sec{background:#fff;color:var(--ink);border-color:var(--line)}
+  .o5 .sec:hover,.o5 .sec.hv{background:var(--hover);border-color:#cfcfcf}
+  .o5 .gho{background:transparent;color:var(--green);border-color:transparent}
+  .o5 .gho:hover,.o5 .gho.hv{background:var(--green-weak)}
+
+  .danger{background:#fff;color:var(--red);border:1px solid #f1c9c3}
+  .danger:hover,.danger.hv{background:var(--red-weak)}
+  .small{min-height:30px;padding:0 11px;font-size:12px}
+</style></head>
+<body>
+  <h1>Button systems — Mono / minimal green</h1>
+  <p class="lede">Five directions. Each shows <b>Primary</b>, <b>Secondary</b>, <b>Ghost</b> in resting state, plus a row showing the <b>hover</b> state (the live page also responds to real hover, press, and keyboard focus). A “View order” icon button shows the small/table size.</p>
+
+  <!-- OPTION 1 -->
+  <section class="opt o1">
+    <div class="opt-h"><span class="tag">Option 1</span><h2>Solid (refined)</h2></div>
+    <p>Closest to a classic SaaS look: a confident solid-green primary, a green-tinted secondary, and a hairline ghost. Hover deepens the green; press nudges down 1px.</p>
+    <div class="row"><span class="lab">Rest</span><button class="btn pri">Send invoice</button><button class="btn sec">Preview</button><button class="btn gho">Cancel</button><button class="btn danger">Delete</button><button class="btn gho small">View order</button></div>
+    <div class="row"><span class="lab">Hover</span><button class="btn pri hv">Send invoice</button><button class="btn sec hv">Preview</button><button class="btn gho hv">Cancel</button><button class="btn danger hv">Delete</button></div>
+  </section>
+
+  <!-- OPTION 2 -->
+  <section class="opt o2">
+    <div class="opt-h"><span class="tag">Option 2</span><h2>Soft tint (most minimal green)</h2></div>
+    <p>Green is never a solid block — the primary is a soft green tint with green text, gaining a border only on hover. Quietest, most “minimal green” of the set; ghost is borderless until hovered.</p>
+    <div class="row"><span class="lab">Rest</span><button class="btn pri">Send invoice</button><button class="btn sec">Preview</button><button class="btn gho">Cancel</button><button class="btn danger">Delete</button><button class="btn gho small">View order</button></div>
+    <div class="row"><span class="lab">Hover</span><button class="btn pri hv">Send invoice</button><button class="btn sec hv">Preview</button><button class="btn gho hv">Cancel</button><button class="btn danger hv">Delete</button></div>
+  </section>
+
+  <!-- OPTION 3 -->
+  <section class="opt o3">
+    <div class="opt-h"><span class="tag">Option 3</span><h2>Outline-fill (interactive)</h2></div>
+    <p>Everything is an outline at rest; hover <b>fills</b> the button (green for primary, ink for secondary). Very crisp and tactile — the fill animation makes interactions feel responsive.</p>
+    <div class="row"><span class="lab">Rest</span><button class="btn pri">Send invoice</button><button class="btn sec">Preview</button><button class="btn gho">Cancel</button><button class="btn danger">Delete</button><button class="btn gho small">View order</button></div>
+    <div class="row"><span class="lab">Hover</span><button class="btn pri hv">Send invoice</button><button class="btn sec hv">Preview</button><button class="btn gho hv">Cancel</button><button class="btn danger hv">Delete</button></div>
+  </section>
+
+  <!-- OPTION 4 -->
+  <section class="opt o4">
+    <div class="opt-h"><span class="tag">Option 4</span><h2>Mono ink → green on hover</h2></div>
+    <p>Purest Mono: the primary is black at rest and turns <b>green only on hover</b>, so green appears as a reward for interaction. Secondary is an ink outline that goes green on hover. Maximum restraint.</p>
+    <div class="row"><span class="lab">Rest</span><button class="btn pri">Send invoice</button><button class="btn sec">Preview</button><button class="btn gho">Cancel</button><button class="btn danger">Delete</button><button class="btn gho small">View order</button></div>
+    <div class="row"><span class="lab">Hover</span><button class="btn pri hv">Send invoice</button><button class="btn sec hv">Preview</button><button class="btn gho hv">Cancel</button><button class="btn danger hv">Delete</button></div>
+  </section>
+
+  <!-- OPTION 5 -->
+  <section class="opt o5">
+    <div class="opt-h"><span class="tag">Option 5</span><h2>Soft pill</h2></div>
+    <p>Fully rounded pills for a friendlier feel while staying minimal. Primary lifts with a faint green glow on hover; ghost is a borderless green text button that tints on hover.</p>
+    <div class="row"><span class="lab">Rest</span><button class="btn pri">Send invoice</button><button class="btn sec">Preview</button><button class="btn gho">Cancel</button><button class="btn danger">Delete</button><button class="btn gho small">View order</button></div>
+    <div class="row"><span class="lab">Hover</span><button class="btn pri hv">Send invoice</button><button class="btn sec hv">Preview</button><button class="btn gho hv">Cancel</button><button class="btn danger hv">Delete</button></div>
+  </section>
+</body></html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  :root{
+    --ink:#0a0a0a; --muted:#6b6b6b; --faint:#9a9a9a;
+    --line:#e6e6e6; --line-strong:#1a1a1a; --bg:#ffffff; --accent:#0a0a0a; --hover:#f6f6f6;
+    --pos:#1f7a4d; --warn:#9a7415;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Inter",-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);font-size:13px;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:212px 1fr;min-height:100vh}
+  .side{border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:26px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .mark{width:26px;height:26px;border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;letter-spacing:.04em}
+  .brand b{font-size:13px;font-weight:650;letter-spacing:-.01em}
+  .nav{display:flex;flex-direction:column;gap:1px}
+  .nav a{padding:8px 10px;color:var(--muted);text-decoration:none;border-radius:4px;font-weight:500}
+  .nav a:hover{background:var(--hover);color:var(--ink)}
+  .nav a.on{background:var(--ink);color:#fff}
+  .side small{color:var(--faint);font-size:11px;line-height:1.5;margin-top:auto}
+  .main{padding:34px 40px}
+  .eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:10px;color:var(--faint);font-weight:600}
+  h1{font-size:26px;font-weight:660;letter-spacing:-.03em;margin:6px 0 4px}
+  .sub{color:var(--muted)}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:28px}
+  .btn{border:1px solid var(--line-strong);background:var(--ink);color:#fff;padding:9px 16px;font-size:12px;font-weight:550;border-radius:5px;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  /* metrics */
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px}
+  .metric{border:1px solid var(--line);border-radius:8px;padding:16px 18px}
+  .metric .k{text-transform:uppercase;letter-spacing:.1em;font-size:10px;color:var(--faint);font-weight:600}
+  .metric .v{font-size:26px;font-weight:680;letter-spacing:-.03em;margin-top:10px;font-variant-numeric:tabular-nums}
+  .metric .d{font-size:11px;color:var(--muted);margin-top:6px}
+  .metric .d b{color:var(--pos);font-weight:650}
+  /* two col */
+  .cols{display:grid;grid-template-columns:1fr 320px;gap:14px}
+  .panel{border:1px solid var(--line);border-radius:8px}
+  .panel-h{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .panel-h h2{font-size:13px;font-weight:650;letter-spacing:-.01em}
+  .panel-h a{font-size:11px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line-strong);padding-bottom:1px}
+  table{width:100%;border-collapse:collapse}
+  td{padding:12px 16px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--hover)}
+  .num{font-weight:600}
+  .r{text-align:right;font-variant-numeric:tabular-nums}
+  .tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
+  .tag.pos{border-color:#cfe8d8;color:var(--pos);background:#f3faf6}
+  .tag.warn{border-color:#f0e0bf;color:var(--warn);background:#fdf8ec}
+  /* sync card */
+  .sync{padding:16px}
+  .sync .row{display:flex;justify-content:space-between;align-items:baseline}
+  .sync .lab{font-weight:650}
+  .sync .meta{color:var(--muted);font-size:12px;margin-top:3px}
+  .bar{height:4px;background:var(--line);border-radius:99px;margin:14px 0 12px;overflow:hidden}
+  .bar i{display:block;height:100%;width:100%;background:var(--ink)}
+  .quick{border-top:1px solid var(--line);margin-top:4px}
+  .quick a{display:flex;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);text-decoration:none;color:var(--ink);font-weight:500}
+  .quick a:last-child{border-bottom:0}
+  .quick a:hover{background:var(--hover)}
+  .quick a span{color:var(--faint)}
+</style></head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="mark">SI</div><b>Send Invoice</b></div>
+    <nav class="nav">
+      <a class="on">Home</a><a>Orders</a><a>Vendors</a><a>Invoice Templates</a>
+      <a>Notifications</a><a>Settings</a><a>Support</a>
+    </nav>
+    <small><b style="color:var(--ink)">Demo Store</b><br>demo-store.myshopify.com</small>
+  </aside>
+  <main class="main">
+    <div class="head">
+      <div>
+        <p class="eyebrow">Overview</p>
+        <h1>Dashboard</h1>
+        <p class="sub">Your store at a glance.</p>
+      </div>
+      <button class="btn">Sync now</button>
+    </div>
+    <div class="metrics">
+      <div class="metric"><div class="k">Invoiced · 30d</div><div class="v">$48,920</div><div class="d"><b>▲ 12%</b> vs last month</div></div>
+      <div class="metric"><div class="k">Orders synced</div><div class="v">1,284</div><div class="d">Last synced 3h ago</div></div>
+      <div class="metric"><div class="k">Pending invoices</div><div class="v">7</div><div class="d">3 awaiting payment</div></div>
+      <div class="metric"><div class="k">Active vendors</div><div class="v">14</div><div class="d">2 added this month</div></div>
+    </div>
+    <div class="cols">
+      <div class="panel">
+        <div class="panel-h"><h2>Recent orders</h2><a>View all</a></div>
+        <table><tbody>
+          <tr><td class="num">#1001</td><td>Ava Thompson</td><td class="r num">$384.51</td><td class="r"><span class="tag warn">Partially paid</span></td></tr>
+          <tr><td class="num">#1002</td><td>Liam Carter</td><td class="r num">$59.00</td><td class="r"><span class="tag pos">Paid</span></td></tr>
+          <tr><td class="num">#1003</td><td>Noah Reed</td><td class="r num">$1,240.00</td><td class="r"><span class="tag warn">Pending</span></td></tr>
+          <tr><td class="num">#1004</td><td>Mia Flores</td><td class="r num">$128.40</td><td class="r"><span class="tag pos">Paid</span></td></tr>
+          <tr><td class="num">#1005</td><td>Ethan Brooks</td><td class="r num">$642.10</td><td class="r"><span class="tag">Refunded</span></td></tr>
+        </tbody></table>
+      </div>
+      <div class="panel">
+        <div class="sync">
+          <div class="row"><span class="lab">Last synced 3h ago</span><span class="meta">100%</span></div>
+          <div class="meta">Shopify data is ready.</div>
+          <div class="bar"><i></i></div>
+          <button class="btn ghost" style="width:100%">Sync now</button>
+        </div>
+        <div class="quick">
+          <a>Create invoice <span>→</span></a>
+          <a>Manage vendors <span>→</span></a>
+          <a>Edit invoice template <span>→</span></a>
+          <a>Notification settings <span>→</span></a>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body></html>

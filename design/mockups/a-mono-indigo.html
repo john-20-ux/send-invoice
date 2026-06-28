@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  :root{
+    --ink:#0a0a0a; --muted:#6b6b6b; --faint:#9a9a9a;
+    --line:#e6e6e6; --line-strong:#1a1a1a; --bg:#ffffff; --panel:#ffffff; --accent:#4f46e5;--accent-soft:#eef0fe;
+    --hover:#f6f6f6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Inter",-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);
+       font-size:13px;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:212px 1fr;min-height:100vh}
+  /* sidebar */
+  .side{border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:26px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .mark{width:26px;height:26px;border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;
+        font-weight:700;font-size:11px;letter-spacing:.04em}
+  .brand b{font-size:13px;font-weight:650;letter-spacing:-.01em}
+  .nav{display:flex;flex-direction:column;gap:1px}
+  .nav a{padding:8px 10px;color:var(--muted);text-decoration:none;border-radius:4px;font-weight:500;letter-spacing:-.005em}
+  .nav a:hover{background:var(--hover);color:var(--ink)}
+  .nav a.on{background:var(--accent-soft);color:var(--accent)}
+  .side small{color:var(--faint);font-size:11px;line-height:1.5;margin-top:auto}
+  /* main */
+  .main{padding:34px 40px}
+  .eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:10px;color:var(--faint);font-weight:600}
+  h1{font-size:26px;font-weight:660;letter-spacing:-.03em;margin:6px 0 4px}
+  .sub{color:var(--muted)}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:30px}
+  .btn{border:1px solid var(--accent);background:var(--accent);color:#fff;padding:9px 16px;font-size:12px;
+       font-weight:550;border-radius:5px;cursor:pointer;letter-spacing:.01em}
+  .btn.ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  /* filter */
+  .filters{display:grid;grid-template-columns:1fr 280px auto;gap:14px;align-items:end;margin-bottom:26px}
+  label{display:block;font-size:11px;color:var(--muted);font-weight:600;margin-bottom:7px;letter-spacing:.01em}
+  input,.field{width:100%;height:38px;border:1px solid var(--line);border-radius:5px;padding:0 12px;font:inherit;
+        color:var(--ink);display:flex;align-items:center;gap:8px}
+  input::placeholder{color:var(--faint)}
+  .field{color:var(--muted)}
+  .acts{display:flex;gap:8px}
+  /* table */
+  .table{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
+     font-weight:600;padding:13px 16px;border-bottom:1px solid var(--line);background:#fafafa}
+  td{padding:15px 16px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--hover)}
+  .num{font-weight:600}
+  .r{text-align:right}
+  .tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+       padding:3px 8px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
+  .tag.pos{border-color:#cfe8d8;color:#1f7a4d;background:#f3faf6}
+  .tag.warn{border-color:#f0e0bf;color:#9a7415;background:#fdf8ec}
+  .link{color:var(--accent);text-decoration:none;font-weight:600;border-bottom:1px solid var(--accent-soft);padding-bottom:1px}
+  .rowacts{display:flex;gap:14px}
+</style></head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="mark">SI</div><b>Send Invoice</b></div>
+    <nav class="nav">
+      <a>Home</a><a class="on">Orders</a><a>Vendors</a><a>Invoice Templates</a>
+      <a>Notifications</a><a>Settings</a><a>Support</a>
+    </nav>
+    <small><b style="color:var(--ink)">Demo Store</b><br>demo-store.myshopify.com</small>
+  </aside>
+  <main class="main">
+    <div class="head">
+      <div>
+        <p class="eyebrow">Order desk</p>
+        <h1>Orders</h1>
+        <p class="sub">31 orders match the current filters.</p>
+      </div>
+      <button class="btn">Sync</button>
+    </div>
+    <div class="filters">
+      <div><label>Search</label><input placeholder="Name, order, email"></div>
+      <div><label>Date range</label><div class="field">▦&nbsp; Jun 1 – Jun 28, 2026</div></div>
+      <div class="acts"><button class="btn">Apply</button><button class="btn ghost">Clear</button></div>
+    </div>
+    <div class="table">
+      <table>
+        <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Email</th><th class="r">Items</th><th class="r">Total</th><th>Payment</th><th>Fulfillment</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="num">#1001</td><td>Jun 24, 2026</td><td>Ava Thompson</td><td>ava@example.com</td><td class="r">3</td><td class="r num">$384.51</td><td><span class="tag warn">Partially paid</span></td><td><span class="tag">Partial</span></td><td><div class="rowacts"><a class="link">View</a><a class="link">Invoice</a></div></td></tr>
+          <tr><td class="num">#1002</td><td>Jun 23, 2026</td><td>Liam Carter</td><td>liam@example.com</td><td class="r">1</td><td class="r num">$59.00</td><td><span class="tag pos">Paid</span></td><td><span class="tag">Fulfilled</span></td><td><div class="rowacts"><a class="link">View</a><a class="link">Invoice</a></div></td></tr>
+          <tr><td class="num">#1003</td><td>Jun 22, 2026</td><td>Noah Reed</td><td>noah@example.com</td><td class="r">5</td><td class="r num">$1,240.00</td><td><span class="tag warn">Pending</span></td><td><span class="tag">Unfulfilled</span></td><td><div class="rowacts"><a class="link">View</a><a class="link">Invoice</a></div></td></tr>
+          <tr><td class="num">#1004</td><td>Jun 21, 2026</td><td>Mia Flores</td><td>mia@example.com</td><td class="r">2</td><td class="r num">$128.40</td><td><span class="tag pos">Paid</span></td><td><span class="tag">Fulfilled</span></td><td><div class="rowacts"><a class="link">View</a><a class="link">Invoice</a></div></td></tr>
+          <tr><td class="num">#1005</td><td>Jun 20, 2026</td><td>Ethan Brooks</td><td>ethan@example.com</td><td class="r">4</td><td class="r num">$642.10</td><td><span class="tag">Refunded</span></td><td><span class="tag">Fulfilled</span></td><td><div class="rowacts"><a class="link">View</a><a class="link">Invoice</a></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+</body></html>

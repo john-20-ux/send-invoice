@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  :root{
+    --ink:#0a0a0a; --muted:#6b6b6b; --faint:#9a9a9a;
+    --line:#e6e6e6; --line-strong:#1a1a1a; --bg:#ffffff; --accent:#0a0a0a; --hover:#f6f6f6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Inter",-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:#f4f4f4;font-size:13px;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:212px 1fr;min-height:100vh}
+  .side{border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:26px;background:#fff}
+  .brand{display:flex;align-items:center;gap:10px}
+  .mark{width:26px;height:26px;border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px}
+  .brand b{font-size:13px;font-weight:650}
+  .nav{display:flex;flex-direction:column;gap:1px}
+  .nav a{padding:8px 10px;color:var(--muted);text-decoration:none;border-radius:4px;font-weight:500}
+  .nav a:hover{background:var(--hover);color:var(--ink)}
+  .nav a.on{background:var(--ink);color:#fff}
+  .side small{color:var(--faint);font-size:11px;line-height:1.5;margin-top:auto}
+  .main{padding:28px 40px}
+  .eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:10px;color:var(--faint);font-weight:600}
+  h1{font-size:24px;font-weight:660;letter-spacing:-.03em;margin:6px 0 4px}
+  .sub{color:var(--muted)}
+  .toolbar{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:22px}
+  .btn{border:1px solid var(--line-strong);background:var(--ink);color:#fff;padding:9px 16px;font-size:12px;font-weight:550;border-radius:5px;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  .acts{display:flex;gap:8px}
+  /* invoice paper */
+  .sheet{max-width:720px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:44px 48px;margin:0 auto;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .inv-top{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:26px;border-bottom:1px solid var(--line-strong)}
+  .inv-brand{display:flex;align-items:center;gap:11px}
+  .inv-brand .mark{width:34px;height:34px;font-size:13px}
+  .inv-brand b{font-size:16px;font-weight:660;display:block}
+  .inv-brand span{color:var(--muted);font-size:12px}
+  .inv-meta{text-align:right}
+  .inv-meta .lab{text-transform:uppercase;letter-spacing:.2em;font-size:11px;color:var(--faint);font-weight:600}
+  .inv-meta .no{font-size:20px;font-weight:680;letter-spacing:-.02em;margin-top:4px}
+  .inv-meta .date{color:var(--muted);font-size:12px;margin-top:4px}
+  .parties{display:grid;grid-template-columns:1fr 1fr;gap:24px;padding:26px 0;border-bottom:1px solid var(--line)}
+  .party .k{text-transform:uppercase;letter-spacing:.1em;font-size:10px;color:var(--faint);font-weight:600;margin-bottom:8px}
+  .party .name{font-weight:600;margin-bottom:3px}
+  .party .ln{color:var(--muted);line-height:1.7}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);font-weight:600;padding:16px 0 12px;border-bottom:1px solid var(--line)}
+  td{padding:14px 0;border-bottom:1px solid var(--line)}
+  .r{text-align:right;font-variant-numeric:tabular-nums}
+  .desc b{font-weight:600;display:block}
+  .desc span{color:var(--faint);font-size:12px}
+  .totals{margin-left:auto;width:260px;margin-top:18px}
+  .totals .row{display:flex;justify-content:space-between;padding:8px 0;color:var(--muted)}
+  .totals .row.grand{border-top:1px solid var(--line-strong);margin-top:8px;padding-top:14px;color:var(--ink);font-size:17px;font-weight:680}
+  .note{margin-top:30px;padding-top:22px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.7}
+  .note b{color:var(--ink);font-weight:600}
+</style></head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="mark">SI</div><b>Send Invoice</b></div>
+    <nav class="nav">
+      <a>Home</a><a class="on">Orders</a><a>Vendors</a><a>Invoice Templates</a>
+      <a>Notifications</a><a>Settings</a><a>Support</a>
+    </nav>
+    <small><b style="color:var(--ink)">Demo Store</b><br>demo-store.myshopify.com</small>
+  </aside>
+  <main class="main">
+    <div class="toolbar">
+      <div>
+        <p class="eyebrow">Order #1001</p>
+        <h1>Invoice</h1>
+        <p class="sub">Preview before sending to the customer.</p>
+      </div>
+      <div class="acts"><button class="btn ghost">Download PDF</button><button class="btn">Send invoice</button></div>
+    </div>
+    <div class="sheet">
+      <div class="inv-top">
+        <div class="inv-brand"><div class="mark">SI</div><div><b>Demo Store</b><span>demo-store.myshopify.com</span></div></div>
+        <div class="inv-meta"><div class="lab">Invoice</div><div class="no">#1001</div><div class="date">Issued Jun 24, 2026 · Due Jul 8, 2026</div></div>
+      </div>
+      <div class="parties">
+        <div class="party"><div class="k">From</div><div class="name">Demo Store</div><div class="ln">123 Commerce St<br>Austin, TX 78701<br>billing@demostore.com</div></div>
+        <div class="party"><div class="k">Bill to</div><div class="name">Ava Thompson</div><div class="ln">ava@example.com<br>48 Maple Avenue<br>Denver, CO 80202</div></div>
+      </div>
+      <table>
+        <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+        <tbody>
+          <tr><td class="desc"><b>Linen Throw Blanket</b><span>SKU LIN-204 · Sand</span></td><td class="r">1</td><td class="r">$129.00</td><td class="r">$129.00</td></tr>
+          <tr><td class="desc"><b>Ceramic Mug Set</b><span>SKU MUG-118 · Set of 4</span></td><td class="r">2</td><td class="r">$48.00</td><td class="r">$96.00</td></tr>
+          <tr><td class="desc"><b>Scented Candle</b><span>SKU CND-077 · Cedar</span></td><td class="r">3</td><td class="r">$24.50</td><td class="r">$73.50</td></tr>
+        </tbody>
+      </table>
+      <div class="totals">
+        <div class="row"><span>Subtotal</span><span>$298.50</span></div>
+        <div class="row"><span>Tax (8.25%)</span><span>$24.63</span></div>
+        <div class="row"><span>Shipping</span><span>$12.00</span></div>
+        <div class="row grand"><span>Total</span><span>$335.13</span></div>
+      </div>
+      <div class="note"><b>Payment terms.</b> Please pay within 14 days using the secure checkout link included in your email. Questions? Reply to this invoice or contact billing@demostore.com.</div>
+    </div>
+  </main>
+</div>
+</body></html>
