@@ -87,11 +87,25 @@ module SendInvoice
       @smtp_from_email = env["SMTP_FROM_EMAIL"].to_s
       @smtp_from_name = env["SMTP_FROM_NAME"].to_s
       @smtp_use_tls = env["SMTP_USE_TLS"] != "false"
+      @encryption_key = env["ENCRYPTION_KEY"].to_s
+      # Opt into Shopify expiring offline access tokens (rotation). Required by
+      # Shopify in 2026; keep configurable so existing installs can roll over.
+      @expiring_tokens = env.fetch("EXPIRING_OFFLINE_TOKENS", "true") != "false"
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
     end
 
+    attr_reader :encryption_key
+
     def mock_mode?
       @mock_mode
+    end
+
+    def expiring_tokens?
+      @expiring_tokens
+    end
+
+    def encryption_configured?
+      !@encryption_key.to_s.strip.empty?
     end
 
     def order_webhooks_enabled?

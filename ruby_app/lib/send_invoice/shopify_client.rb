@@ -22,13 +22,16 @@ module SendInvoice
     end
 
     def build_auth_url(shop, redirect_uri, state)
-      query = URI.encode_www_form(
-        client_id: @config.shopify_api_key,
-        scope: @config.shopify_scopes.join(","),
-        redirect_uri: redirect_uri,
-        state: state
-      )
-      "https://#{shop}/admin/oauth/authorize?#{query}"
+      params = [
+        ["client_id", @config.shopify_api_key],
+        ["scope", @config.shopify_scopes.join(",")],
+        ["redirect_uri", redirect_uri],
+        ["state", state]
+      ]
+      # Opt into expiring offline access tokens (token rotation); the exchange
+      # then returns expires_in + refresh_token.
+      params << ["grant_options[]", "expiring_offline_access_token"] if @config.respond_to?(:expiring_tokens?) && @config.expiring_tokens?
+      "https://#{shop}/admin/oauth/authorize?#{URI.encode_www_form(params)}"
     end
 
     def verify_hmac(params)
@@ -57,6 +60,19 @@ module SendInvoice
         client_id: @config.shopify_api_key,
         client_secret: @config.shopify_api_secret,
         code: code
+      })
+      JSON.parse(response.body)
+    end
+
+    # Exchange a refresh token for a new (access_token, refresh_token) pair when
+    # using expiring offline access tokens.
+    def refresh_access_token(shop, refresh_token)
+      uri = URI("https://#{shop}/admin/oauth/access_token")
+      response = post_json(uri, {
+        client_id: @config.shopify_api_key,
+        client_secret: @config.shopify_api_secret,
+        grant_type: "refresh_token",
+        refresh_token: refresh_token
       })
       JSON.parse(response.body)
     end

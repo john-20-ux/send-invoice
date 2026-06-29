@@ -280,18 +280,38 @@ module SendInvoice
       raise UnauthorizedError, "HMAC verification failed" unless @shopify_client.verify_hmac(stringified_params)
 
       token_data = @shopify_client.exchange_token(shop, code)
-      shop_info = @shopify_client.fetch_shop_info(shop, token_data.fetch("access_token"))
+      access_token = token_data.fetch("access_token")
+      shop_info = @shopify_client.fetch_shop_info(shop, access_token)
       @store.ensure_shop(shop, {
-        "access_token" => token_data.fetch("access_token"),
+        "access_token" => access_token,
         "scopes" => token_data["scope"],
         "shop_name" => shop_info["name"] || shop.split(".").first
       })
-      register_shop_webhooks(shop, token_data.fetch("access_token"))
+      persist_token_rotation(shop, token_data)
+      register_shop_webhooks(shop, access_token)
       @session["shop_domain"] = shop
       @session["admin_shop_domain"] = shop
       @session["queue_ops_admin_granted"] = true
       @session.delete("state")
       redirect_to("/onboarding?shop=#{URI.encode_www_form_component(shop)}")
+    end
+
+    # Store expiring-offline-token rotation fields from an OAuth/refresh response.
+    # No-op for permanent (non-expiring) tokens, which omit expires_in.
+    def persist_token_rotation(shop_domain, token_data)
+      expires_in = token_data["expires_in"]
+      return unless expires_in
+
+      now = Time.now.utc
+      refresh_expires_in = token_data["refresh_token_expires_in"]
+      @store.update_shop_tokens(
+        shop_domain,
+        access_token: token_data.fetch("access_token"),
+        token_expires_at: (now + expires_in.to_i).iso8601,
+        refresh_token: token_data["refresh_token"],
+        refresh_token_expires_at: refresh_expires_in ? (now + refresh_expires_in.to_i).iso8601 : nil,
+        scopes: token_data["scope"]
+      )
     end
 
     def render_onboarding(step)
@@ -1071,6 +1091,12 @@ module SendInvoice
       })
     end
 
+    # Shopify can deliver a webhook more than once. Dedupe by webhook id so
+    # handlers stay idempotent; returns true when this delivery was already seen.
+    def duplicate_webhook?(topic, shop_domain)
+      !@store.record_webhook_once(header_value("x-shopify-webhook-id"), topic: topic, shop_domain: shop_domain)
+    end
+
     def handle_bulk_operations_finish_webhook
       raw_body = @request.body.to_s
       hmac = header_value("x-shopify-hmac-sha256")
@@ -1081,6 +1107,7 @@ module SendInvoice
 
       shop_domain = header_value("x-shopify-shop-domain").to_s
       raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+      return respond_json({ received: true, duplicate: true }) if duplicate_webhook?(topic, shop_domain)
 
       shop = @store.shop(shop_domain)
       raise UnauthorizedError, "Unknown webhook shop" unless shop
@@ -1105,6 +1132,7 @@ module SendInvoice
 
       shop_domain = header_value("x-shopify-shop-domain").to_s
       raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+      return respond_json({ received: true, duplicate: true }) if duplicate_webhook?(topic, shop_domain)
 
       shop = @sync_engine.mark_shop_uninstalled(shop_domain)
       respond_json({
@@ -1124,6 +1152,7 @@ module SendInvoice
 
       shop_domain = header_value("x-shopify-shop-domain").to_s
       raise UnauthorizedError, "Invalid webhook shop domain" unless @shopify_client.valid_shop_domain?(shop_domain)
+      return respond_json({ received: true, duplicate: true }) if duplicate_webhook?(topic, shop_domain)
 
       shop = @store.shop(shop_domain)
       raise UnauthorizedError, "Unknown webhook shop" unless shop
@@ -1147,6 +1176,7 @@ module SendInvoice
 
       payload = JSON.parse(raw_body)
       shop_domain = compliance_shop_domain(payload)
+      return respond_json({ received: true, duplicate: true }) if duplicate_webhook?(topic, shop_domain)
 
       case topic
       when "customers/data_request"

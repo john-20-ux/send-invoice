@@ -22,6 +22,10 @@ services:
         sync: false
       - key: SHOPIFY_API_SECRET
         sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: EXPIRING_OFFLINE_TOKENS
+        value: "true"
       - key: SHOPIFY_SCOPES
         value: read_orders
       - key: SHOPIFY_API_VERSION

@@ -216,6 +216,23 @@ module SendInvoice
             ON invoice_deliveries(shop_domain, order_id, created_at DESC);
         SQL
 
+        # Webhook idempotency: dedupe by Shopify's X-Shopify-Webhook-Id header.
+        db.execute_batch(<<~SQL)
+          CREATE TABLE IF NOT EXISTS processed_webhooks (
+            webhook_id TEXT PRIMARY KEY,
+            topic TEXT,
+            shop_domain TEXT,
+            processed_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_processed_webhooks_processed_at
+            ON processed_webhooks(processed_at);
+        SQL
+
+        # Expiring offline access token rotation fields.
+        ensure_column(db, "shops", "token_expires_at", "TEXT")
+        ensure_column(db, "shops", "refresh_token", "TEXT")
+        ensure_column(db, "shops", "refresh_token_expires_at", "TEXT")
+
         ensure_column(db, "orders", "updated_at", "TEXT")
         ensure_column(db, "shops", "uninstalled_at", "TEXT")
         ensure_column(db, "shops", "scheduled_for_deletion_at", "TEXT")

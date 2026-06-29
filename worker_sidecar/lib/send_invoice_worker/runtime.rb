@@ -11,6 +11,7 @@ require "send_invoice/mock_data"
 require "send_invoice/shopify_client"
 require "send_invoice/store"
 require "send_invoice/sync_engine"
+require "send_invoice/token_refresher"
 
 module SendInvoiceWorker
   class Runtime
@@ -44,12 +45,17 @@ module SendInvoiceWorker
       )
     end
 
+    def token_refresher
+      @token_refresher ||= SendInvoice::TokenRefresher.new(store: store, shopify_client: shopify_client)
+    end
+
     def fetch_shop!(shop_domain)
       shop = store.shop(shop_domain)
       raise "Unknown shop: #{shop_domain}" unless shop
       raise "Shop uninstalled: #{shop_domain}" if shop["uninstalled_at"]
 
-      shop
+      # Refresh an expiring offline token before it's used for live sync.
+      token_refresher.fresh_shop(shop)
     end
   end
 end

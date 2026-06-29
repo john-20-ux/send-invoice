@@ -3,11 +3,23 @@
 require "json"
 require "securerandom"
 require "time"
+require "send_invoice/token_cipher"
 
 module SendInvoice
   class Store
-    def initialize(database)
+    def initialize(database, cipher: nil)
       @database = database
+      # Shared by the web app and worker (both load this lib), so reading the
+      # key from ENV keeps token encryption consistent across processes.
+      @cipher = cipher || TokenCipher.new(ENV["ENCRYPTION_KEY"])
+    end
+
+    def encrypt_token(value)
+      @cipher.encrypt(value)
+    end
+
+    def decrypt_token(value)
+      @cipher.decrypt(value)
     end
 
     def ensure_shop(shop_domain, attributes = {})
@@ -25,7 +37,7 @@ module SendInvoice
         "id" => SecureRandom.uuid,
         "shop_domain" => shop_domain,
         "shop_name" => attributes["shop_name"] || attributes[:shop_name] || default_shop_name(shop_domain),
-        "access_token" => attributes["access_token"] || attributes[:access_token],
+        "access_token" => encrypt_token(attributes["access_token"] || attributes[:access_token]),
         "scopes" => attributes["scopes"] || attributes[:scopes],
         "owner_email" => attributes["owner_email"] || attributes[:owner_email],
         "installed_at" => now,
@@ -71,6 +83,32 @@ module SendInvoice
           hydrate_shop(row)
         end
       end
+    end
+
+    # Record a webhook delivery by its X-Shopify-Webhook-Id. Returns true the
+    # first time an id is seen (caller should process it) and false on repeats
+    # (caller should skip). Webhooks without an id are always processed.
+    def record_webhook_once(webhook_id, topic: nil, shop_domain: nil)
+      return true if webhook_id.to_s.strip.empty?
+
+      @database.with_connection do |db|
+        db.execute(
+          "INSERT OR IGNORE INTO processed_webhooks (webhook_id, topic, shop_domain, processed_at) VALUES (?, ?, ?, ?)",
+          [webhook_id.to_s, normalize_text(topic), normalize_text(shop_domain), Time.now.utc.iso8601]
+        )
+        db.changes.to_i.positive?
+      end
+    end
+
+    # Persist expiring-offline-token rotation fields after OAuth or a refresh.
+    def update_shop_tokens(shop_domain, access_token:, token_expires_at: nil, refresh_token: nil, refresh_token_expires_at: nil, scopes: nil)
+      attributes = { "access_token" => access_token }
+      attributes["token_expires_at"] = token_expires_at
+      attributes["refresh_token"] = refresh_token unless refresh_token.nil?
+      attributes["refresh_token_expires_at"] = refresh_token_expires_at unless refresh_token_expires_at.nil?
+      attributes["scopes"] = scopes unless scopes.nil?
+      update_shop(shop_domain, attributes)
+      shop(shop_domain)
     end
 
     def mark_shop_uninstalled(shop_domain, uninstalled_at:, scheduled_for_deletion_at:)
@@ -509,6 +547,9 @@ module SendInvoice
         when "onboarded"
           updates << "onboarded = ?"
           values << truthy_db(value)
+        when "access_token", "refresh_token"
+          updates << "#{key} = ?"
+          values << encrypt_token(value)
         else
           updates << "#{key} = ?"
           values << value
@@ -1155,7 +1196,10 @@ module SendInvoice
         "id" => row["id"],
         "shop_domain" => normalize_text(row["shop_domain"]),
         "shop_name" => normalize_text(row["shop_name"]),
-        "access_token" => normalize_text(row["access_token"]),
+        "access_token" => decrypt_token(normalize_text(row["access_token"])),
+        "token_expires_at" => normalize_text(row["token_expires_at"]),
+        "refresh_token" => decrypt_token(normalize_text(row["refresh_token"])),
+        "refresh_token_expires_at" => normalize_text(row["refresh_token_expires_at"]),
         "scopes" => normalize_text(row["scopes"]),
         "owner_email" => normalize_text(row["owner_email"]),
         "installed_at" => normalize_text(row["installed_at"]),
