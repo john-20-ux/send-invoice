@@ -9,6 +9,21 @@ require "uri"
 
 module SendInvoice
   class ShopifyClient
+    # Raised when Shopify keeps rate-limiting after we exhaust retries; callers
+    # can surface a friendly "please retry shortly" message.
+    class RateLimitError < StandardError; end
+
+    MAX_RETRIES = Integer(ENV.fetch("SHOPIFY_MAX_RETRIES", "4"))
+    RETRY_BASE_SECONDS = Float(ENV.fetch("SHOPIFY_RETRY_BASE_SECONDS", "0.5"))
+    RETRY_MAX_SECONDS = Float(ENV.fetch("SHOPIFY_RETRY_MAX_SECONDS", "8"))
+    OPEN_TIMEOUT = Integer(ENV.fetch("SHOPIFY_HTTP_OPEN_TIMEOUT", "10"))
+    READ_TIMEOUT = Integer(ENV.fetch("SHOPIFY_HTTP_READ_TIMEOUT", "30"))
+    RETRYABLE_STATUSES = [429, 500, 502, 503, 504].freeze
+    RETRYABLE_NETWORK_ERRORS = [
+      Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNRESET,
+      Errno::ECONNREFUSED, Errno::EHOSTUNREACH, SocketError, IOError
+    ].freeze
+
     def initialize(config)
       @config = config
     end
@@ -85,14 +100,50 @@ module SendInvoice
 
     def graph_ql(shop, access_token, query, variables = {})
       uri = URI("https://#{shop}/admin/api/#{@config.api_version}/graphql.json")
-      response = post_json(uri, { query: query, variables: variables }, access_token: access_token)
-      payload = JSON.parse(response.body)
+      attempt = 0
 
-      if payload["errors"] && !payload["errors"].empty?
-        raise "Shopify GraphQL error: #{payload['errors'].map { |error| error['message'] }.join(', ')}"
+      loop do
+        attempt += 1
+        response = post_json(uri, { query: query, variables: variables }, access_token: access_token)
+        payload = JSON.parse(response.body)
+
+        # GraphQL cost throttling returns HTTP 200 with a THROTTLED error.
+        if graphql_throttled?(payload) && attempt <= MAX_RETRIES
+          sleep(graphql_throttle_delay(payload, attempt))
+          next
+        end
+
+        if payload["errors"] && !payload["errors"].empty?
+          raise RateLimitError, "Shopify API rate limit reached. Please retry shortly." if graphql_throttled?(payload)
+
+          raise "Shopify GraphQL error: #{payload['errors'].map { |error| error['message'] }.join(', ')}"
+        end
+
+        return payload.fetch("data")
+      end
+    end
+
+    def graphql_throttled?(payload)
+      Array(payload["errors"]).any? do |error|
+        error.is_a?(Hash) && error.dig("extensions", "code") == "THROTTLED"
+      end
+    end
+
+    # Wait based on Shopify's reported throttleStatus when available, else backoff.
+    def graphql_throttle_delay(payload, attempt)
+      cost = payload.dig("extensions", "cost")
+      status = cost && cost["throttleStatus"]
+      if status
+        requested = cost["requestedQueryCost"].to_f
+        available = status["currentlyAvailable"].to_f
+        restore = status["restoreRate"].to_f
+        if restore.positive? && requested > available
+          wait = (requested - available) / restore
+          return [[wait, RETRY_MAX_SECONDS].min, RETRY_BASE_SECONDS].max
+        end
       end
 
-      payload.fetch("data")
+      retry_delay(attempt)
     end
 
     def start_bulk_query(shop, access_token, query)
@@ -277,12 +328,46 @@ module SendInvoice
 
     def request(uri, request, access_token: nil)
       request["X-Shopify-Access-Token"] = access_token if access_token
-      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
-        response = http.request(request)
+      attempt = 0
+
+      loop do
+        attempt += 1
+        response =
+          begin
+            Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https",
+                            open_timeout: OPEN_TIMEOUT, read_timeout: READ_TIMEOUT) do |http|
+              http.request(request)
+            end
+          rescue *RETRYABLE_NETWORK_ERRORS => e
+            raise "Shopify request error: #{e.class}: #{e.message}" if attempt > MAX_RETRIES
+
+            sleep(retry_delay(attempt))
+            next
+          end
+
         return response if response.is_a?(Net::HTTPSuccess)
+
+        code = response.code.to_i
+        if RETRYABLE_STATUSES.include?(code) && attempt <= MAX_RETRIES
+          sleep(retry_delay(attempt, response))
+          next
+        end
+
+        raise RateLimitError, "Shopify API rate limit reached. Please retry shortly." if code == 429
 
         raise "Shopify request failed: #{response.code} #{response.body}"
       end
+    end
+
+    # Exponential backoff with jitter; honors a Retry-After header when present.
+    def retry_delay(attempt, response = nil)
+      if response && response["Retry-After"]
+        after = response["Retry-After"].to_f
+        return after if after.positive?
+      end
+
+      delay = RETRY_BASE_SECONDS * (2**(attempt - 1))
+      [delay, RETRY_MAX_SECONDS].min + rand * 0.25
     end
 
     def secure_compare(left, right)
