@@ -943,9 +943,22 @@
     });
   }
 
+  // Make table rows with data-href open on click. Clicks on links/buttons
+  // inside the row keep their own behavior; text selection is preserved.
+  function bootClickableRows() {
+    document.addEventListener("click", function (event) {
+      if (event.target.closest("a, button, input, select, label")) return;
+      var row = event.target.closest("tr[data-href]");
+      if (!row) return;
+      if (window.getSelection && String(window.getSelection())) return;
+      window.location.href = row.dataset.href;
+    });
+  }
+
   bootSyncPolling();
   bootOnboardingSync();
   bootInvoicePreview();
   bootDateRangePicker();
   bootNavRail();
+  bootClickableRows();
 })();

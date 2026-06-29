@@ -48,9 +48,6 @@
     </div>
 
     <section class="preview-card stack">
-      <div>
-        <h3>Style presets</h3>
-      </div>
       <div class="template-preset-grid">
         <% template_options.each do |value, label| %>
           <button
@@ -64,20 +61,12 @@
         <% end %>
       </div>
 
-      <div class="field">
-        <label for="template">Template style</label>
-        <select id="template" name="template" data-preview-template>
-          <% template_options.each do |value, label| %>
-            <option value="<%= value %>" <%= @invoice_config["template"] == value ? "selected" : "" %>><%= label %></option>
-          <% end %>
-        </select>
-      </div>
+      <%# Template choice is driven by the preset cards above; this hidden
+          field carries the value for the live preview and on save. %>
+      <input type="hidden" id="template" name="template" value="<%= h(@invoice_config["template"]) %>" data-preview-template>
     </section>
 
     <section class="preview-card stack">
-      <div>
-        <h3>Visual controls</h3>
-      </div>
       <div class="style-tool-grid">
         <div class="field">
           <label for="accent_color">Accent color</label>
@@ -129,10 +118,6 @@
     </section>
 
     <section class="preview-card stack">
-      <div>
-        <h3>Document fields</h3>
-      </div>
-
       <% {
         "company_name" => "Company name",
         "tagline" => "Tagline",

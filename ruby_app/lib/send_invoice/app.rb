@@ -648,7 +648,9 @@ module SendInvoice
 
     def render_vendors
       shop = require_onboarded_shop
-      orders = @store.all_orders(shop["shop_domain"])
+      from = single_value(params["from"])
+      to = single_value(params["to"])
+      orders = filter_orders_by_date(@store.all_orders(shop["shop_domain"]), from, to)
       summaries = vendor_summaries(shop, orders)
       selected_slug = @request.path.split("/")[2]
       render_page("pages/vendors", {
@@ -657,8 +659,29 @@ module SendInvoice
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
         vendor_summaries: summaries,
+        filters: { from: from, to: to },
         selected_vendor_slug: selected_slug
       })
+    end
+
+    # Keep only orders whose created_at falls within an optional [from, to] range.
+    def filter_orders_by_date(orders, from, to)
+      has_from = !from.to_s.strip.empty?
+      has_to = !to.to_s.strip.empty?
+      return orders unless has_from || has_to
+
+      from_time = has_from ? (Time.parse(from).utc rescue nil) : nil
+      to_time = has_to ? ((Time.parse(to) + 86_399).utc rescue nil) : nil
+
+      orders.select do |order|
+        raw = order["created_at"].to_s
+        next false if raw.empty?
+
+        created = (Time.parse(raw).utc rescue nil)
+        next false if created.nil?
+
+        (from_time.nil? || created >= from_time) && (to_time.nil? || created <= to_time)
+      end
     end
 
     def handle_vendor_edits

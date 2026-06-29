@@ -6,6 +6,21 @@
         <p class="section-note">Review revenue, commission, deductions, and net payable by vendor.</p>
       </div>
     </div>
+
+    <form method="get" action="/vendors" class="vendor-filters" style="margin-top:18px">
+      <div class="field" data-date-range>
+        <label>Date range</label>
+        <div class="date-range-native">
+          <input id="from" type="date" name="from" value="<%= h(@filters[:from]) %>" aria-label="From date">
+          <span class="date-range-native-sep">to</span>
+          <input id="to" type="date" name="to" value="<%= h(@filters[:to]) %>" aria-label="To date">
+        </div>
+      </div>
+      <div class="button-inline filter-actions">
+        <button class="button" type="submit">Apply</button>
+        <a class="button-ghost" href="/vendors">Clear</a>
+      </div>
+    </form>
   </section>
 
   <section class="table-shell">

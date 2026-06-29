@@ -704,6 +704,17 @@ html.nav-rail .sidebar-toggle {
   align-items: end;
 }
 
+.vendor-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.vendor-filters [data-date-range] {
+  min-width: 260px;
+}
+
 @media (max-width: 1040px) {
   .orders-filters {
     grid-template-columns: 1fr 1fr;
@@ -1050,6 +1061,19 @@ html.nav-rail .sidebar-toggle {
 
 .data-table tbody tr:hover td {
   background: var(--hover);
+}
+
+.order-row {
+  cursor: pointer;
+}
+
+.order-link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.order-row:hover .order-link {
+  color: var(--accent);
 }
 
 .data-table tbody tr.is-selected td {
