@@ -1,0 +1,28 @@
+inherit_from: .rubocop_todo.yml
+
+# RuboCop is scoped to real correctness issues (Lint/Security/Bundler) for now,
+# not stylistic churn across the existing codebase. Tighten over time.
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: disable
+  SuggestExtensions: false
+  Exclude:
+    - 'vendor/**/*'
+    - 'node_modules/**/*'
+    - 'tmp/**/*'
+    - 'ruby_app/db/**/*'
+    - 'worker_sidecar/db/**/*'
+    - 'worker_sidecar/tmp/**/*'
+    - 'test_cases/**/*'
+    - 'bin/**/*'
+
+Style:
+  Enabled: false
+Layout:
+  Enabled: false
+Metrics:
+  Enabled: false
+Naming:
+  Enabled: false
+Gemspec:
+  Enabled: false

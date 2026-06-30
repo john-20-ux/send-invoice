@@ -1,0 +1,21 @@
+# Local containerized run. Defaults to mock mode (no Shopify creds needed).
+# For real OAuth/sync, set the Shopify + ENCRYPTION_KEY vars (e.g. via a .env
+# file referenced with `env_file:`), and flip MOCK_MODE to "false".
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      MOCK_MODE: "true"
+      HOST: "http://localhost:3000"
+      DATABASE_PATH: "/data/send_invoice.sqlite3"
+      # ENCRYPTION_KEY: "<32-byte hex>"   # required when MOCK_MODE=false
+      # SHOPIFY_API_KEY: ""
+      # SHOPIFY_API_SECRET: ""
+    volumes:
+      - send_invoice_data:/data
+    restart: unless-stopped
+
+volumes:
+  send_invoice_data:
