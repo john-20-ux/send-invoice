@@ -40,6 +40,10 @@ services:
         value: "300"
       - key: SYNC_API_SECRET
         sync: false
+      - key: APP_ENV
+        value: staging
+      - key: ERROR_WEBHOOK_URL
+        sync: false
     disk:
       name: send-invoice-staging-data
       mountPath: /var/data

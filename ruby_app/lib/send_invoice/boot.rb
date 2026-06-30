@@ -15,6 +15,9 @@ module SendInvoice
     module_function
 
     def start
+      # Flush logs immediately so container/platform log streams stay live.
+      $stdout.sync = true
+      $stderr.sync = true
       root = File.expand_path("../../..", __dir__)
       config = Configuration.load(root: root)
       database = Database.new(config)

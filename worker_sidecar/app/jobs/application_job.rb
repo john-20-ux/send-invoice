@@ -83,6 +83,7 @@ class ApplicationJob < ActiveJob::Base
       warn "[send-invoice-worker] async request #{request_id} retry scheduled after #{delay}s (attempt #{attempts}/#{max_attempts}) during #{phase}: #{error.class}: #{error.message}"
     else
       runtime.store.fail_async_job_request(request_id, error.message)
+      runtime.error_reporter.report(error, request_id: request_id, phase: phase, attempts: attempts, source: "worker")
       warn "[send-invoice-worker] async request #{request_id} failed permanently after #{attempts} attempt(s) during #{phase}: #{error.class}: #{error.message}"
     end
   end

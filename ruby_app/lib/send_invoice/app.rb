@@ -2,11 +2,13 @@
 
 require "erb"
 require "json"
+require "logger"
 require "securerandom"
 require "time"
 require "uri"
 require "webrick"
 
+require "send_invoice/error_reporter"
 require "send_invoice/view_helpers"
 require "send_invoice/invoice_document"
 require "send_invoice/invoice_mailer"
@@ -58,6 +60,20 @@ module SendInvoice
       @store = store
       @sync_engine = sync_engine
       @shopify_client = shopify_client
+      @logger = build_logger
+      @error_reporter = ErrorReporter.new(
+        logger: @logger,
+        webhook_url: @config.error_webhook_url,
+        environment: @config.app_env
+      )
+    end
+
+    # Structured (JSON-per-line) logger to stdout for easy aggregation.
+    def build_logger
+      logger = Logger.new($stdout)
+      logger.level = Logger::INFO
+      logger.formatter = proc { |_severity, _time, _progname, message| "#{message}\n" }
+      logger
     end
 
     def handle(req, res)
@@ -66,6 +82,9 @@ module SendInvoice
       @session_id = nil
       @session = nil
       @params = nil
+      @request_id = sanitize_request_id(header_value("x-request-id")) || SecureRandom.hex(8)
+      @request_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      @response["X-Request-Id"] = @request_id
       @response["Content-Type"] = "text/html; charset=utf-8"
       # Standalone (non-embedded) app: it is never legitimately framed, so forbid
       # all framing to prevent clickjacking. CSP covers modern browsers; the
@@ -90,8 +109,7 @@ module SendInvoice
         sync_status: current_sync_status(optional: true)
       }, status: 404)
     rescue StandardError => e
-      warn "[send-invoice] #{e.class}: #{e.message}"
-      warn e.backtrace.first(10).join("\n")
+      @error_reporter.report(e, request_id: @request_id, method: @request.request_method, path: @request.path)
       if api_request? || webhook_request?
         respond_json({ error: "Internal server error" }, status: 500)
       else
@@ -105,6 +123,30 @@ module SendInvoice
       end
     ensure
       persist_session
+      log_request
+    end
+
+    # One structured JSON line per request for log aggregation.
+    def log_request
+      duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - @request_started_at) * 1000).round(1)
+      @logger.info(JSON.generate(
+        "level" => "info",
+        "event" => "request",
+        "request_id" => @request_id,
+        "method" => @request.request_method,
+        "path" => @request.path,
+        "status" => @response.status,
+        "duration_ms" => duration_ms
+      ))
+    rescue StandardError
+      # Logging must never break a response.
+    end
+
+    # Only allow safe characters from an inbound request id (defense against
+    # header/log injection); fall back to a generated id otherwise.
+    def sanitize_request_id(value)
+      value = value.to_s
+      value.match?(/\A[A-Za-z0-9._-]{1,128}\z/) ? value : nil
     end
 
     def render_partial(name, locals = {})

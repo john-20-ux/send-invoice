@@ -91,10 +91,13 @@ module SendInvoice
       # Opt into Shopify expiring offline access tokens (rotation). Required by
       # Shopify in 2026; keep configurable so existing installs can roll over.
       @expiring_tokens = env.fetch("EXPIRING_OFFLINE_TOKENS", "true") != "false"
+      # Observability: optional alert webhook (Slack-compatible) + environment tag.
+      @error_webhook_url = (env["ERROR_WEBHOOK_URL"] || env["SLACK_WEBHOOK_URL"]).to_s
+      @app_env = env["APP_ENV"] || env["RACK_ENV"] || "development"
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
     end
 
-    attr_reader :encryption_key
+    attr_reader :encryption_key, :error_webhook_url, :app_env
 
     def mock_mode?
       @mock_mode
