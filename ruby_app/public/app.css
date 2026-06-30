@@ -789,9 +789,22 @@ html.nav-rail .sidebar-toggle {
   padding: 14px;
 }
 
-/* Plan cards: top accent strip marks the current (or recommended) plan. */
+/* Inline notice for plan-limited views (e.g. Free plan data window). */
+.window-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--accent-weak);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+/* Plan cards: top accent strip marks the current (or recommended) plan.
+   Flex column so the action can be pinned to the bottom. */
 .plan-card {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .plan-strip {
@@ -815,6 +828,18 @@ html.nav-rail .sidebar-toggle {
 /* The active plan also gets a tinted fill; recommended stays an outline. */
 .plan-card.is-active {
   background: var(--accent-weak);
+}
+
+/* Action pinned to the bottom (aligned across cards) and full width. */
+.plan-card .button-inline {
+  width: 100%;
+  margin-top: auto;
+  padding-top: 20px;
+}
+
+.plan-card .button-inline form,
+.plan-card .button-inline .button {
+  width: 100%;
 }
 
 .metric-card .label {

@@ -22,6 +22,10 @@
     </form>
   </div>
 
+  <% if @data_window_start %>
+    <p class="window-note">On the Free plan you can view orders from the last 30 days (since <%= h(@data_window_start) %>). Upgrade for full order history.</p>
+  <% end %>
+
   <form method="get" action="/orders" class="orders-filters" style="margin-top:20px">
     <div class="field">
       <label for="search">Search</label>

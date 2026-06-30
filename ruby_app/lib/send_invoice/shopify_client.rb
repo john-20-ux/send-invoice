@@ -179,6 +179,26 @@ module SendInvoice
       result
     end
 
+    # Cancels a recurring subscription (e.g. when downgrading to the free plan)
+    # so the merchant stops being billed. No-op-safe if the id is blank.
+    def cancel_app_subscription(shop, access_token, subscription_id)
+      return if subscription_id.to_s.empty?
+
+      data = graph_ql(shop, access_token, <<~GRAPHQL, { "id" => subscription_id })
+        mutation CancelAppSubscription($id: ID!) {
+          appSubscriptionCancel(id: $id) {
+            appSubscription { id status }
+            userErrors { field message }
+          }
+        }
+      GRAPHQL
+      result = data.fetch("appSubscriptionCancel")
+      errors = result["userErrors"] || []
+      raise "Shopify billing error: #{errors.map { |error| error['message'] }.join(', ')}" unless errors.empty?
+
+      result
+    end
+
     # Returns the merchant's currently ACTIVE app subscription, or nil.
     def active_subscription(shop, access_token)
       data = graph_ql(shop, access_token, <<~GRAPHQL)

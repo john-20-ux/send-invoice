@@ -40,16 +40,25 @@ module SendInvoice
 
     TRIAL_DAYS = 14
 
-    # Paid plans billed through Shopify. invoice_limit is per calendar month;
-    # nil means unlimited. The 14-day trial grants unlimited (all features).
+    # Plan tiers. invoice_limit is per calendar month (nil = unlimited);
+    # data_window_days caps how far back orders are viewable (nil = full
+    # history). The free plan is $0 (no Shopify charge); the 14-day trial
+    # grants unlimited everything.
     BILLING_PLANS = {
+      "free" => {
+        "name" => "Free", "amount" => 0.0, "currency" => "USD", "invoice_limit" => 10,
+        "data_window_days" => 30, "tagline" => "Try it out",
+        "features" => ["Up to 10 invoices per month", "Last 30 days of data", "Download & print invoices"]
+      },
       "basic" => {
         "name" => "Basic", "amount" => 5.0, "currency" => "USD", "invoice_limit" => 50,
-        "features" => ["50 invoices per month", "Automated schedules", "Email delivery", "All invoice templates"]
+        "data_window_days" => nil, "tagline" => "For getting started",
+        "features" => ["50 invoices per month", "Full order history", "Automated schedules", "Email delivery", "3 invoice templates", "Email support"]
       },
       "pro" => {
         "name" => "Pro", "amount" => 13.0, "currency" => "USD", "invoice_limit" => nil,
-        "features" => ["Unlimited invoice exports", "Automated schedules", "Email delivery", "All invoice templates", "Priority support"]
+        "data_window_days" => nil, "tagline" => "Unlimited everything",
+        "features" => ["Unlimited invoice exports", "Full order history", "Automated schedules", "Email delivery", "All invoice templates", "Email & live chat support"]
       }
     }.freeze
 
@@ -469,6 +478,13 @@ module SendInvoice
         financial_status: single_value(params["financial_status"]),
         fulfillment_status: single_value(params["fulfillment_status"])
       }
+      # Plans with a data window (e.g. Free) can't view orders older than the
+      # window — clamp the lower bound so older data is never returned.
+      window_start = data_window_start(shop)
+      if window_start
+        requested_from = filters[:from].to_s
+        filters[:from] = requested_from > window_start ? requested_from : window_start
+      end
       result = @store.orders(shop["shop_domain"], filters)
       selected_order_id = single_value(params["order_id"])
       order = selected_order_id ? @store.order(shop["shop_domain"], selected_order_id) : nil
@@ -487,6 +503,7 @@ module SendInvoice
         order_result: result,
         selected_order_id: selected_order_id,
         selected_order_missing: !selected_order_id.to_s.empty? && order.nil?,
+        data_window_start: window_start,
         pagination_path: "/orders"
       })
     end
@@ -960,6 +977,16 @@ module SendInvoice
       if @config.mock_mode?
         @store.update_shop(shop["shop_domain"], "current_plan" => plan_id, "plan_status" => "active")
         flash!("info", "Plan set to #{BILLING_PLANS[plan_id]['name']} (mock mode — no real charge).")
+        redirect_to("/settings/plans")
+        return
+      end
+
+      # The free plan carries no Shopify charge. Cancel any paid subscription
+      # (so billing stops) and activate it directly — no approval round-trip.
+      if plan_id == "free"
+        @shopify_client.cancel_app_subscription(shop["shop_domain"], shop["access_token"], shop["subscription_id"])
+        @store.update_shop(shop["shop_domain"], "current_plan" => "free", "plan_status" => "active", "subscription_id" => nil)
+        flash!("info", "You're on the Free plan.")
         redirect_to("/settings/plans")
         return
       end
@@ -1732,12 +1759,13 @@ module SendInvoice
 
     def plan_definitions
       BILLING_PLANS.map do |id, plan|
+        free = plan["amount"].to_f.zero?
         {
           "id" => id,
           "name" => plan["name"],
-          "price" => "$#{format('%g', plan['amount'])}",
-          "period" => "/mo",
-          "tagline" => id == "pro" ? "Unlimited everything" : "For getting started",
+          "price" => free ? "Free" : "$#{format('%g', plan['amount'])}",
+          "period" => free ? "" : "/mo",
+          "tagline" => plan["tagline"],
           "popular" => id == "pro",
           "features" => plan["features"]
         }
@@ -1783,11 +1811,20 @@ module SendInvoice
 
     # nil = unlimited; 0 = blocked (no plan / trial expired); else monthly cap.
     def invoice_limit_for(shop)
-      case effective_plan(shop)
-      when "basic" then BILLING_PLANS["basic"]["invoice_limit"]
-      when "pro", "trial" then nil
-      else 0
-      end
+      plan = effective_plan(shop)
+      return nil if plan == "trial"
+      return BILLING_PLANS[plan]["invoice_limit"] if plan && BILLING_PLANS.key?(plan)
+
+      0
+    end
+
+    # Oldest date (YYYY-MM-DD) the plan may view, or nil for full history.
+    def data_window_start(shop)
+      plan = effective_plan(shop)
+      days = (plan && BILLING_PLANS.key?(plan)) ? BILLING_PLANS[plan]["data_window_days"] : nil
+      return nil unless days
+
+      (Time.now.utc - days * 86_400).strftime("%Y-%m-%d")
     end
 
     def billing_period_start
@@ -1804,8 +1841,10 @@ module SendInvoice
       limit = invoice_limit_for(shop)
       return "Your free trial has ended. Choose a plan to keep sending invoices." if limit == 0
       return nil if limit.nil?
+      return nil if invoice_usage(shop) < limit
 
-      invoice_usage(shop) >= limit ? "You've used all #{limit} invoices on the Basic plan this month. Upgrade to Pro for unlimited exports." : nil
+      plan_name = BILLING_PLANS.dig(effective_plan(shop), "name") || "current"
+      "You've used all #{limit} invoices on the #{plan_name} plan this month. Upgrade for more invoices and full history."
     end
 
     def faq_items
