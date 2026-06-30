@@ -94,10 +94,13 @@ module SendInvoice
       # Observability: optional alert webhook (Slack-compatible) + environment tag.
       @error_webhook_url = (env["ERROR_WEBHOOK_URL"] || env["SLACK_WEBHOOK_URL"]).to_s
       @app_env = env["APP_ENV"] || env["RACK_ENV"] || "development"
+      # Protected Customer Data: delete synced orders (which carry customer PII)
+      # older than this many days. 0 disables retention purging.
+      @order_retention_days = [Integer(env["ORDER_RETENTION_DAYS"] || "0", 10), 0].max
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
     end
 
-    attr_reader :encryption_key, :error_webhook_url, :app_env
+    attr_reader :encryption_key, :error_webhook_url, :app_env, :order_retention_days
 
     def mock_mode?
       @mock_mode

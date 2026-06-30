@@ -1307,6 +1307,8 @@ module SendInvoice
           content: content,
           nav_items: NAV_ITEMS,
           admin_nav_items: queue_ops_admin?(render_locals[:shop]) ? ADMIN_NAV_ITEMS : [],
+          reauth_required: reauth_required?(render_locals[:shop]),
+          reauth_path: reauth_path(render_locals[:shop]),
           flash: consume_flash
         )
       )
@@ -1707,6 +1709,26 @@ module SendInvoice
 
     def base_locals
       { current_year: Time.now.year }
+    end
+
+    # Scopes the app now requires that the merchant hasn't granted yet (e.g. after
+    # we add a scope). Empty in mock mode / when fully granted.
+    def missing_scopes(shop)
+      return [] unless shop
+      return [] if @config.mock_mode?
+
+      granted = shop["scopes"].to_s.split(",").map(&:strip).reject(&:empty?)
+      @config.shopify_scopes - granted
+    end
+
+    def reauth_required?(shop)
+      shop && shop["onboarded"] && !missing_scopes(shop).empty?
+    end
+
+    def reauth_path(shop)
+      return "/auth" unless shop && shop["shop_domain"]
+
+      "/auth?shop=#{URI.encode_www_form_component(shop['shop_domain'])}"
     end
 
     def queue_ops_admin?(shop)

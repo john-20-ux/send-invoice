@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title><%= h(@page_title || "Send Invoice") %></title>
-    <link rel="stylesheet" href="/assets/app.css?v=15">
+    <link rel="stylesheet" href="/assets/app.css?v=16">
     <script>try{if(localStorage.getItem("si-nav-rail")==="1")document.documentElement.classList.add("nav-rail")}catch(e){}</script>
   </head>
   <body class="app-body">
@@ -51,6 +51,12 @@
 
         <main class="workspace">
           <%= render_partial("trial_banner", shop: @shop) %>
+          <% if @reauth_required %>
+            <div class="reauth-banner">
+              <span>This app needs additional permissions to keep working. Please reauthorize.</span>
+              <a class="button" href="<%= h(@reauth_path) %>">Reauthorize</a>
+            </div>
+          <% end %>
           <% if @current_path == "/dashboard" || @current_path.to_s.start_with?("/orders") %>
             <%= render_partial("sync_banner", shop: @shop, sync_status: @sync_status) %>
           <% end %>
@@ -90,6 +96,6 @@
       </main>
     <% end %>
 
-    <script src="/assets/app.js?v=15"></script>
+    <script src="/assets/app.js?v=16"></script>
   </body>
 </html>

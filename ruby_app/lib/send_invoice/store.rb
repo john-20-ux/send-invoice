@@ -130,6 +130,26 @@ module SendInvoice
       shop(shop_domain)
     end
 
+    # Data-retention purge: delete orders (and their cascaded invoice rows)
+    # created before the cutoff. Returns the number of orders removed.
+    def purge_orders_older_than(cutoff_iso)
+      @database.with_connection do |db|
+        db.execute(
+          "DELETE FROM orders WHERE created_at IS NOT NULL AND created_at != '' AND created_at < ?",
+          [cutoff_iso]
+        )
+        db.changes.to_i
+      end
+    end
+
+    # Old webhook-dedupe rows have no long-term value; trim them on a schedule.
+    def purge_processed_webhooks_older_than(cutoff_iso)
+      @database.with_connection do |db|
+        db.execute("DELETE FROM processed_webhooks WHERE processed_at < ?", [cutoff_iso])
+        db.changes.to_i
+      end
+    end
+
     def due_data_deletion_shops(reference_time: Time.now.utc.iso8601)
       @database.with_connection do |db|
         db.execute(<<~SQL, [reference_time]).map { |row| hydrate_shop(row) }

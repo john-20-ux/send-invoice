@@ -44,6 +44,8 @@ services:
         value: staging
       - key: ERROR_WEBHOOK_URL
         sync: false
+      - key: ORDER_RETENTION_DAYS
+        value: "0"
     disk:
       name: send-invoice-staging-data
       mountPath: /var/data

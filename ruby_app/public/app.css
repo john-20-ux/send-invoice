@@ -414,6 +414,31 @@ html.nav-rail .sidebar-toggle {
   text-underline-offset: 3px;
 }
 
+.reauth-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 28px;
+  color: var(--red);
+  background: var(--red-weak);
+  border-bottom: 1px solid #f1c9c3;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.reauth-banner .button {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+.reauth-banner .button:hover {
+  background: #fff;
+  color: var(--red);
+}
+
 .sync-banner {
   flex-wrap: wrap;
   background: var(--panel);

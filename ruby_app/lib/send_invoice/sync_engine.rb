@@ -412,8 +412,9 @@ module SendInvoice
         loop do
           begin
             cleanup_uninstalled_shop_data
+            purge_expired_order_data
           rescue StandardError => e
-            warn "[send-invoice] uninstall cleanup failed: #{e.class}: #{e.message}"
+            warn "[send-invoice] cleanup failed: #{e.class}: #{e.message}"
           ensure
             sleep @config.uninstall_cleanup_interval_seconds
           end
@@ -529,6 +530,19 @@ module SendInvoice
         uninstalled_at: uninstalled_at.iso8601,
         scheduled_for_deletion_at: scheduled_for_deletion_at
       )
+    end
+
+    # Protected Customer Data retention: drop synced orders (which carry
+    # customer PII) older than ORDER_RETENTION_DAYS. No-op when retention is 0.
+    def purge_expired_order_data(reference_time: Time.now.utc)
+      days = @config.order_retention_days.to_i
+      return 0 if days <= 0
+
+      cutoff = (reference_time - days * 86_400).iso8601
+      orders = @store.purge_orders_older_than(cutoff)
+      @store.purge_processed_webhooks_older_than(cutoff)
+      warn "[send-invoice] retention purge removed #{orders} order(s) older than #{days}d" if orders.positive?
+      orders
     end
 
     def cleanup_uninstalled_shop_data(reference_time: Time.now.utc)
