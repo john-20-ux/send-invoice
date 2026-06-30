@@ -955,10 +955,39 @@
     });
   }
 
+  // Accordion: one section open at a time. Clicking a header opens it and
+  // closes the rest; clicking an open header closes it.
+  function bootTemplateAccordion() {
+    var root = $("[data-accordion]");
+    if (!root) return;
+
+    var items = Array.prototype.slice.call(root.querySelectorAll(".acc-item"));
+    if (!items.length) return;
+
+    function setOpen(item, open) {
+      item.classList.toggle("is-open", open);
+      var header = item.querySelector(".acc-header");
+      if (header) header.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    items.forEach(function (item, index) {
+      setOpen(item, index === 0); // first section open by default
+      var header = item.querySelector(".acc-header");
+      if (!header) return;
+      header.addEventListener("click", function () {
+        var willOpen = !item.classList.contains("is-open");
+        items.forEach(function (other) {
+          setOpen(other, other === item ? willOpen : false);
+        });
+      });
+    });
+  }
+
   bootSyncPolling();
   bootOnboardingSync();
   bootInvoicePreview();
   bootDateRangePicker();
   bootNavRail();
   bootClickableRows();
+  bootTemplateAccordion();
 })();

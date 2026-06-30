@@ -41,13 +41,17 @@
 %>
 
 <form method="post" action="/invoice-templates" id="invoice-template-form" class="split-layout">
-  <section class="section-card stack invoice-editor-shell">
+  <section class="section-card stack invoice-editor-shell" data-accordion>
     <div>
       <h2>Invoice template</h2>
       <p class="section-note">Switch styles, tune layout controls, and see the invoice update live before you save.</p>
     </div>
 
-    <section class="preview-card stack">
+    <section class="preview-card stack acc-item">
+      <button type="button" class="acc-header" aria-expanded="false">
+        <span class="eyebrow">Style presets</span>
+        <svg class="acc-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
       <div class="template-preset-grid">
         <% template_options.each do |value, label| %>
           <button
@@ -66,7 +70,11 @@
       <input type="hidden" id="template" name="template" value="<%= h(@invoice_config["template"]) %>" data-preview-template>
     </section>
 
-    <section class="preview-card stack">
+    <section class="preview-card stack acc-item">
+      <button type="button" class="acc-header" aria-expanded="false">
+        <span class="eyebrow">Visual controls</span>
+        <svg class="acc-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
       <div class="style-tool-grid">
         <div class="field">
           <label for="accent_color">Accent color</label>
@@ -117,7 +125,11 @@
       </div>
     </section>
 
-    <section class="preview-card stack">
+    <section class="preview-card stack acc-item">
+      <button type="button" class="acc-header" aria-expanded="false">
+        <span class="eyebrow">Document fields</span>
+        <svg class="acc-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
       <% {
         "company_name" => "Company name",
         "tagline" => "Tagline",
@@ -157,10 +169,11 @@
       </div>
     </section>
 
-    <section class="preview-card stack">
-      <div>
-        <h3>Show or hide sections</h3>
-      </div>
+    <section class="preview-card stack acc-item">
+      <button type="button" class="acc-header" aria-expanded="false">
+        <span class="eyebrow">Show or hide sections</span>
+        <svg class="acc-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
       <% {
         "website" => "Show website",
         "gst" => "Show GST or VAT number",
@@ -182,10 +195,11 @@
       <% end %>
     </section>
 
-    <section class="preview-card stack">
-      <div>
-        <h3>Line items</h3>
-      </div>
+    <section class="preview-card stack acc-item">
+      <button type="button" class="acc-header" aria-expanded="false">
+        <span class="eyebrow">Line items</span>
+        <svg class="acc-chevron" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
       <% line_items.each_with_index do |line_item, index| %>
         <div class="invoice-line-editor">
           <div class="field">

@@ -1259,6 +1259,45 @@ html.nav-rail .sidebar-toggle {
   gap: 16px;
 }
 
+/* Collapsible accordion for the invoice editor sections. */
+.acc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.acc-header:hover .acc-chevron {
+  color: var(--text);
+}
+
+.acc-header:focus-visible {
+  outline: 2px solid var(--accent-weak);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.acc-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+
+.acc-item.is-open .acc-chevron {
+  transform: rotate(180deg);
+}
+
+/* Collapsed: hide everything but the header. Open items keep each child's
+   own display (grid/flex/block) since no override is applied. */
+.acc-item:not(.is-open) > :not(.acc-header) {
+  display: none;
+}
+
 .template-preset-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
