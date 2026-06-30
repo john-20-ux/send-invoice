@@ -22,9 +22,16 @@
 
 <section class="cards-grid">
   <% @plans.each do |plan| %>
-    <% active = (@plan_status == "active" && @active_plan == plan["id"]) %>
-    <article class="section-card">
-      <% if plan["popular"] %><p class="eyebrow">Most popular</p><% end %>
+    <% any_active = (@plan_status == "active") %>
+    <% active = any_active && @active_plan == plan["id"] %>
+    <% recommend = !any_active && plan["popular"] %>
+    <% strip = active ? "Your current plan" : (recommend ? "Recommended" : nil) %>
+    <article class="section-card plan-card <%= "is-active" if active %><%= " is-recommended" if recommend %>">
+      <% if strip %>
+        <div class="plan-strip"><%= strip %></div>
+      <% elsif plan["popular"] %>
+        <p class="eyebrow">Most popular</p>
+      <% end %>
       <h2><%= h(plan["name"]) %></h2>
       <p class="muted" style="margin-top:8px"><%= h(plan["tagline"]) %></p>
       <p class="value" style="margin-top:18px"><%= h(plan["price"]) %><small><%= h(plan["period"]) %></small></p>
