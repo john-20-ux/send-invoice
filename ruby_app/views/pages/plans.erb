@@ -1,8 +1,30 @@
+<section class="section-card">
+  <h2>Plans &amp; billing</h2>
+  <% if @plan_status == "active" && @active_plan %>
+    <p class="section-note">
+      You're on the <strong><%= h(@active_plan.capitalize) %></strong> plan.
+      <% if @invoice_limit %>
+        Used <strong><%= @invoice_usage %></strong> of <strong><%= @invoice_limit %></strong> invoices this month.
+      <% else %>
+        Unlimited invoice exports.
+      <% end %>
+    </p>
+  <% elsif @trial_active %>
+    <p class="section-note">
+      You're on a free trial — <strong><%= @trial_days_remaining %></strong>
+      day<%= @trial_days_remaining == 1 ? "" : "s" %> left, all features included.
+      Choose a plan to keep going after it ends.
+    </p>
+  <% else %>
+    <p class="section-note">Your free trial has ended. Choose a plan to keep sending invoices.</p>
+  <% end %>
+</section>
+
 <section class="cards-grid">
   <% @plans.each do |plan| %>
-    <% active = @shop["current_plan"] == plan["id"] %>
+    <% active = (@plan_status == "active" && @active_plan == plan["id"]) %>
     <article class="section-card">
-      <p class="eyebrow"><%= plan["popular"] ? "Most popular" : "Plan" %></p>
+      <% if plan["popular"] %><p class="eyebrow">Most popular</p><% end %>
       <h2><%= h(plan["name"]) %></h2>
       <p class="muted" style="margin-top:8px"><%= h(plan["tagline"]) %></p>
       <p class="value" style="margin-top:18px"><%= h(plan["price"]) %><small><%= h(plan["period"]) %></small></p>
@@ -17,7 +39,7 @@
         <% else %>
           <form method="post" action="/settings/plans">
             <input type="hidden" name="plan" value="<%= h(plan["id"]) %>">
-            <button class="<%= plan["id"] == "enterprise" ? "button-secondary" : "button" %>" type="submit"><%= plan["id"] == "enterprise" ? "Contact sales" : "Switch plan" %></button>
+            <button class="button" type="submit">Choose <%= h(plan["name"]) %></button>
           </form>
         <% end %>
       </div>

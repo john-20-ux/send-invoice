@@ -146,6 +146,52 @@ module SendInvoice
       retry_delay(attempt)
     end
 
+    # Shopify Billing: create a recurring app subscription. Returns the
+    # confirmationUrl (send the merchant there to approve) and the subscription.
+    def create_app_subscription(shop, access_token, name:, amount:, currency:, return_url:, trial_days: 0, test: true)
+      variables = {
+        "name" => name,
+        "returnUrl" => return_url,
+        "test" => test,
+        "trialDays" => trial_days.to_i,
+        "lineItems" => [{
+          "plan" => {
+            "appRecurringPricingDetails" => {
+              "price" => { "amount" => amount, "currencyCode" => currency },
+              "interval" => "EVERY_30_DAYS"
+            }
+          }
+        }]
+      }
+      data = graph_ql(shop, access_token, <<~GRAPHQL, variables)
+        mutation CreateAppSubscription($name: String!, $returnUrl: URL!, $test: Boolean, $trialDays: Int, $lineItems: [AppSubscriptionLineItemInput!]!) {
+          appSubscriptionCreate(name: $name, returnUrl: $returnUrl, test: $test, trialDays: $trialDays, lineItems: $lineItems) {
+            confirmationUrl
+            appSubscription { id status }
+            userErrors { field message }
+          }
+        }
+      GRAPHQL
+      result = data.fetch("appSubscriptionCreate")
+      errors = result["userErrors"] || []
+      raise "Shopify billing error: #{errors.map { |error| error['message'] }.join(', ')}" unless errors.empty?
+
+      result
+    end
+
+    # Returns the merchant's currently ACTIVE app subscription, or nil.
+    def active_subscription(shop, access_token)
+      data = graph_ql(shop, access_token, <<~GRAPHQL)
+        query ActiveSubscriptions {
+          currentAppInstallation {
+            activeSubscriptions { id name status }
+          }
+        }
+      GRAPHQL
+      subscriptions = data.dig("currentAppInstallation", "activeSubscriptions") || []
+      subscriptions.find { |subscription| subscription["status"] == "ACTIVE" }
+    end
+
     def start_bulk_query(shop, access_token, query)
       data = graph_ql(shop, access_token, <<~GRAPHQL, { "query" => query })
         mutation StartBulkQuery($query: String!) {

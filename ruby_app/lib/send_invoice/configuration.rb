@@ -97,6 +97,13 @@ module SendInvoice
       # Protected Customer Data: delete synced orders (which carry customer PII)
       # older than this many days. 0 disables retention purging.
       @order_retention_days = [Integer(env["ORDER_RETENTION_DAYS"] || "0", 10), 0].max
+      # Billing test charges (no real money) unless explicitly disabled; default
+      # to test everywhere except production.
+      @billing_test = if env.key?("BILLING_TEST")
+                        env["BILLING_TEST"] != "false"
+                      else
+                        @app_env != "production"
+                      end
       @mock_mode = env["MOCK_MODE"] == "true" || @shopify_api_key.empty? || @shopify_api_secret.empty?
     end
 
@@ -108,6 +115,10 @@ module SendInvoice
 
     def expiring_tokens?
       @expiring_tokens
+    end
+
+    def billing_test?
+      @billing_test
     end
 
     def encryption_configured?

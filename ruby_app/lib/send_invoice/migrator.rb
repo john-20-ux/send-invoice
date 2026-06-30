@@ -233,6 +233,10 @@ module SendInvoice
         ensure_column(db, "shops", "refresh_token", "TEXT")
         ensure_column(db, "shops", "refresh_token_expires_at", "TEXT")
 
+        # Shopify Billing: active subscription id + status.
+        ensure_column(db, "shops", "subscription_id", "TEXT")
+        ensure_column(db, "shops", "plan_status", "TEXT")
+
         ensure_column(db, "orders", "updated_at", "TEXT")
         ensure_column(db, "shops", "uninstalled_at", "TEXT")
         ensure_column(db, "shops", "scheduled_for_deletion_at", "TEXT")

@@ -38,6 +38,21 @@ module SendInvoice
 
     ASYNC_REQUEST_STATUSES = %w[queued claimed dispatched running completed failed].freeze
 
+    TRIAL_DAYS = 14
+
+    # Paid plans billed through Shopify. invoice_limit is per calendar month;
+    # nil means unlimited. The 14-day trial grants unlimited (all features).
+    BILLING_PLANS = {
+      "basic" => {
+        "name" => "Basic", "amount" => 5.0, "currency" => "USD", "invoice_limit" => 50,
+        "features" => ["50 invoices per month", "Automated schedules", "Email delivery", "All invoice templates"]
+      },
+      "pro" => {
+        "name" => "Pro", "amount" => 13.0, "currency" => "USD", "invoice_limit" => nil,
+        "features" => ["Unlimited invoice exports", "Automated schedules", "Email delivery", "All invoice templates", "Priority support"]
+      }
+    }.freeze
+
     class TemplateContext
       include ViewHelpers
 
@@ -225,6 +240,8 @@ module SendInvoice
         handle_settings_save
       when ["GET", "/settings/plans"]
         render_plans
+      when ["GET", "/settings/plans/callback"]
+        handle_plan_callback
       when ["POST", "/settings/plans"]
         handle_plan_change
       when ["GET", "/support"]
@@ -528,6 +545,13 @@ module SendInvoice
     def handle_send_order_invoice
       shop = require_onboarded_shop
       order = selected_order(shop)
+
+      if (reason = invoice_block_reason(shop))
+        flash!("error", reason)
+        redirect_to(order_detail_path(order["id"], shop["shop_domain"]))
+        return
+      end
+
       draft = invoice_delivery_draft_for(shop, order)
       recipient_email = single_value(params["recipient_email"]).to_s.strip
       subject = single_value(params["email_subject"]).to_s.strip
@@ -907,24 +931,80 @@ module SendInvoice
 
     def render_plans
       shop = require_onboarded_shop
+      limit = invoice_limit_for(shop)
       render_page("pages/plans", {
         page_title: "Plans",
         current_path: "/settings/plans",
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
-        plans: plan_definitions
+        plans: plan_definitions,
+        active_plan: effective_plan(shop),
+        plan_status: shop["plan_status"],
+        trial_active: trial_active?(shop),
+        trial_days_remaining: trial_days_remaining(shop),
+        invoice_usage: invoice_usage(shop),
+        invoice_limit: limit
       })
     end
 
     def handle_plan_change
       shop = require_onboarded_shop
-      plan = single_value(params["plan"]).to_s
-      if plan == "enterprise"
-        flash!("info", "Contact sales and we will reach out to discuss your needs.")
-      else
-        @store.update_shop(shop["shop_domain"], "current_plan" => plan)
-        flash!("info", "Plan updated to #{plan.capitalize}.")
+      plan_id = single_value(params["plan"]).to_s
+      unless BILLING_PLANS.key?(plan_id)
+        flash!("error", "Unknown plan.")
+        redirect_to("/settings/plans")
+        return
       end
+
+      # Mock mode has no Shopify billing — just record the choice.
+      if @config.mock_mode?
+        @store.update_shop(shop["shop_domain"], "current_plan" => plan_id, "plan_status" => "active")
+        flash!("info", "Plan set to #{BILLING_PLANS[plan_id]['name']} (mock mode — no real charge).")
+        redirect_to("/settings/plans")
+        return
+      end
+
+      plan = BILLING_PLANS[plan_id]
+      host = @config.host.sub(%r{/\z}, "")
+      return_url = "#{host}/settings/plans/callback?shop=#{URI.encode_www_form_component(shop['shop_domain'])}&plan=#{plan_id}"
+      result = @shopify_client.create_app_subscription(
+        shop["shop_domain"], shop["access_token"],
+        name: "Send Invoice #{plan['name']}",
+        amount: plan["amount"], currency: plan["currency"],
+        return_url: return_url,
+        trial_days: trial_days_remaining(shop),
+        test: @config.billing_test?
+      )
+      @store.update_shop(shop["shop_domain"],
+        "current_plan" => plan_id,
+        "plan_status" => "pending",
+        "subscription_id" => result.dig("appSubscription", "id"))
+      redirect_to(result.fetch("confirmationUrl"))
+    rescue StandardError => e
+      @error_reporter.report(e, path: "/settings/plans", shop: shop && shop["shop_domain"])
+      flash!("error", "Could not start checkout. Please try again.")
+      redirect_to("/settings/plans")
+    end
+
+    # Shopify redirects here after the merchant approves (or declines) the
+    # subscription. Confirm it's ACTIVE before granting the plan.
+    def handle_plan_callback
+      shop = require_onboarded_shop
+      requested_plan = single_value(params["plan"]).to_s
+      active = @shopify_client.active_subscription(shop["shop_domain"], shop["access_token"])
+
+      if active
+        plan_id = BILLING_PLANS.key?(requested_plan) ? requested_plan : (active["name"].to_s.downcase.include?("pro") ? "pro" : "basic")
+        @store.update_shop(shop["shop_domain"], "current_plan" => plan_id, "plan_status" => "active", "subscription_id" => active["id"])
+        flash!("info", "#{BILLING_PLANS.fetch(plan_id, { 'name' => plan_id })['name']} plan is now active.")
+      else
+        @store.update_shop(shop["shop_domain"], "plan_status" => "none")
+        flash!("error", "The subscription was not approved.")
+      end
+      redirect_to("/settings/plans")
+    rescue StandardError => e
+      @error_reporter.report(e, path: "/settings/plans/callback", shop: shop && shop["shop_domain"])
+      flash!("error", "We couldn't confirm your subscription. Please check Settings → Plans.")
       redirect_to("/settings/plans")
     end
 
@@ -1647,12 +1727,81 @@ module SendInvoice
     end
 
     def plan_definitions
-      [
-        { "id" => "basic", "name" => "Basic", "price" => "$9", "period" => "/mo", "tagline" => "For Shopify Basic stores", "features" => ["Basic invoice templates", "Email and SMS notifications", "Up to 100 orders per month"] },
-        { "id" => "growth", "name" => "Growth", "price" => "$29", "period" => "/mo", "tagline" => "For growing stores", "popular" => true, "features" => ["Everything in Basic", "Customizable invoice templates", "Advanced notifications", "Analytics and tracking"] },
-        { "id" => "pro", "name" => "Pro", "price" => "$79", "period" => "/mo", "tagline" => "For Shopify Advanced stores", "features" => ["Everything in Growth", "Multi-currency invoices", "Detailed reporting", "Priority support"] },
-        { "id" => "enterprise", "name" => "Enterprise", "price" => "Custom", "period" => "", "tagline" => "For Shopify Plus", "features" => ["Everything in Pro", "Dedicated account manager", "Custom ERP and CRM integrations", "Subscription invoices"] }
-      ]
+      BILLING_PLANS.map do |id, plan|
+        {
+          "id" => id,
+          "name" => plan["name"],
+          "price" => "$#{format('%g', plan['amount'])}",
+          "period" => "/mo",
+          "tagline" => id == "pro" ? "Unlimited everything" : "For getting started",
+          "popular" => id == "pro",
+          "features" => plan["features"]
+        }
+      end
+    end
+
+    # --- Billing entitlements -------------------------------------------------
+
+    def trial_active?(shop)
+      started = shop && shop["trial_started_at"]
+      return false unless started
+
+      Time.parse(started.to_s) + TRIAL_DAYS * 86_400 > Time.now.utc
+    rescue ArgumentError
+      false
+    end
+
+    def trial_days_remaining(shop)
+      started = shop && shop["trial_started_at"]
+      return 0 unless started
+
+      remaining = ((Time.parse(started.to_s) + TRIAL_DAYS * 86_400) - Time.now.utc) / 86_400.0
+      [remaining.ceil, 0].max
+    rescue ArgumentError
+      0
+    end
+
+    def active_paid_plan(shop)
+      return nil unless shop
+      return shop["current_plan"] if shop["plan_status"] == "active" && BILLING_PLANS.key?(shop["current_plan"])
+
+      nil
+    end
+
+    # Entitlements that apply right now: active paid plan > trial > none.
+    # Mock mode is always treated as trial (unlimited) so local dev isn't gated.
+    def effective_plan(shop)
+      return active_paid_plan(shop) if active_paid_plan(shop)
+      return "trial" if @config.mock_mode? || trial_active?(shop)
+
+      nil
+    end
+
+    # nil = unlimited; 0 = blocked (no plan / trial expired); else monthly cap.
+    def invoice_limit_for(shop)
+      case effective_plan(shop)
+      when "basic" then BILLING_PLANS["basic"]["invoice_limit"]
+      when "pro", "trial" then nil
+      else 0
+      end
+    end
+
+    def billing_period_start
+      now = Time.now.utc
+      Time.utc(now.year, now.month, 1).iso8601
+    end
+
+    def invoice_usage(shop)
+      @store.invoice_delivery_count_since(shop["shop_domain"], billing_period_start)
+    end
+
+    # A reason string when the merchant cannot send another invoice, else nil.
+    def invoice_block_reason(shop)
+      limit = invoice_limit_for(shop)
+      return "Your free trial has ended. Choose a plan to keep sending invoices." if limit == 0
+      return nil if limit.nil?
+
+      invoice_usage(shop) >= limit ? "You've used all #{limit} invoices on the Basic plan this month. Upgrade to Pro for unlimited exports." : nil
     end
 
     def faq_items

@@ -46,6 +46,8 @@ services:
         sync: false
       - key: ORDER_RETENTION_DAYS
         value: "0"
+      - key: BILLING_TEST
+        value: "true"
     disk:
       name: send-invoice-staging-data
       mountPath: /var/data

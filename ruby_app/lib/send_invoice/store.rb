@@ -130,6 +130,17 @@ module SendInvoice
       shop(shop_domain)
     end
 
+    # Count invoice deliveries created on/after a cutoff (for plan quotas).
+    # Excludes failed attempts so a delivery failure doesn't consume quota.
+    def invoice_delivery_count_since(shop_domain, since_iso)
+      @database.with_connection do |db|
+        db.get_first_value(
+          "SELECT COUNT(*) FROM invoice_deliveries WHERE CAST(shop_domain AS TEXT) = ? AND created_at >= ? AND delivery_status != 'failed'",
+          [normalize_text(shop_domain), since_iso]
+        ).to_i
+      end
+    end
+
     # Data-retention purge: delete orders (and their cascaded invoice rows)
     # created before the cutoff. Returns the number of orders removed.
     def purge_orders_older_than(cutoff_iso)
@@ -1229,6 +1240,8 @@ module SendInvoice
         "updated_at" => normalize_text(row["updated_at"]),
         "onboarded" => row["onboarded"].to_i == 1,
         "current_plan" => normalize_text(row["current_plan"]),
+        "subscription_id" => normalize_text(row["subscription_id"]),
+        "plan_status" => normalize_text(row["plan_status"]),
         "trial_started_at" => normalize_text(row["trial_started_at"]),
         "tax_rate" => row["tax_rate"].to_f,
         "currency" => normalize_text(row["currency"]),
