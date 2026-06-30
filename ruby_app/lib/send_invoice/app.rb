@@ -48,8 +48,8 @@ module SendInvoice
       "free" => {
         "name" => "Free", "amount" => 0.0, "currency" => "USD", "invoice_limit" => 10,
         "data_window_days" => 30, "tagline" => "Try it out",
-        "email_delivery" => false, "templates" => %w[classic minimal clean],
-        "features" => ["Up to 10 invoices per month", "Last 30 days of data", "3 invoice templates", "Download & print invoices"]
+        "email_delivery" => false, "templates" => %w[classic],
+        "features" => ["Up to 10 invoices per month", "Last 30 days of data", "1 invoice template", "Download & print invoices"]
       },
       "basic" => {
         "name" => "Basic", "amount" => 5.0, "currency" => "USD", "invoice_limit" => 50,
@@ -1785,12 +1785,11 @@ module SendInvoice
 
     def plan_definitions
       BILLING_PLANS.map do |id, plan|
-        free = plan["amount"].to_f.zero?
         {
           "id" => id,
           "name" => plan["name"],
-          "price" => free ? "Free" : "$#{format('%g', plan['amount'])}",
-          "period" => free ? "" : "/mo",
+          "price" => "$#{format('%g', plan['amount'])}",
+          "period" => "/mo",
           "tagline" => plan["tagline"],
           "popular" => id == "pro",
           "features" => plan["features"]

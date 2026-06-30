@@ -799,24 +799,50 @@ html.nav-rail .sidebar-toggle {
   color: var(--accent);
 }
 
-/* Plan cards: top accent strip marks the current (or recommended) plan.
-   Flex column so the action can be pinned to the bottom. */
+/* Plan cards: a name band on top (filled green on the current plan) keeps the
+   plan names highlighted and the prices aligned across cards. Flex column so
+   the action can be pinned to the bottom. */
 .plan-card {
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.plan-strip {
-  margin: -16px -16px 16px;
-  padding: 8px;
-  background: var(--accent);
-  color: #fff;
-  text-align: center;
+.plan-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  margin: -16px -16px 0;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.plan-band .plan-name {
+  font-size: 17px;
+  font-weight: 760;
+}
+
+.plan-band .plan-tag {
+  margin-left: auto;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
+  color: var(--accent);
+}
+
+.plan-tagline {
+  margin-top: 16px;
+}
+
+.plan-price {
+  margin-top: 12px;
+}
+
+.plan-features {
+  margin-top: 16px;
+  padding-left: 18px;
 }
 
 .plan-card.is-active,
@@ -825,9 +851,15 @@ html.nav-rail .sidebar-toggle {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* The active plan also gets a tinted fill; recommended stays an outline. */
-.plan-card.is-active {
-  background: var(--accent-weak);
+/* The current plan's band fills green with white text. */
+.plan-card.is-active .plan-band {
+  background: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.plan-card.is-active .plan-band .plan-name,
+.plan-card.is-active .plan-band .plan-tag {
+  color: #fff;
 }
 
 /* Action pinned to the bottom (aligned across cards) and full width. */
@@ -840,6 +872,14 @@ html.nav-rail .sidebar-toggle {
 .plan-card .button-inline form,
 .plan-card .button-inline .button {
   width: 100%;
+}
+
+/* Selected plan's bottom action: a solid, non-interactive "Current plan" bar. */
+.plan-card .button-inline .button.is-current,
+.plan-card .button-inline .button.is-current:hover {
+  background: var(--accent);
+  color: #ffffff;
+  cursor: default;
 }
 
 .metric-card .label {
