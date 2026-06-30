@@ -79,6 +79,18 @@ Companion to [protected-customer-data.md](./protected-customer-data.md).
 - [ ] Privacy policy + terms published (`/legal/privacy`, `/legal/terms`)
 - [ ] Uptime monitor pointed at `/health`
 
+## Background worker (Solid Queue)
+
+The `worker_sidecar` runs background jobs (sync, cleanup). Its job queue
+**auto-wires onto the same Postgres** as the app: when `DATABASE_URL` is a
+Postgres URL, the queue (and worker primary) use it; otherwise SQLite in dev.
+The Render blueprint runs it as a `worker` service whose build step loads the
+queue schema idempotently (`bin/rails queue:ensure_schema`) and starts with
+`bin/start`. No separate queue DB is required.
+
+To force a specific queue DB, set `SEND_INVOICE_QUEUE_DATABASE_URL` (or the
+`SEND_INVOICE_QUEUE_DB_*` vars); these override the `DATABASE_URL` default.
+
 ## Local development
 
 ```bash

@@ -1,13 +1,20 @@
 <%
-queue_adapter = ENV.fetch("SEND_INVOICE_QUEUE_DB_ADAPTER", "sqlite3")
-queue_adapter = case queue_adapter
-                when "postgres", "postgresql", "pg"
+# Auto-wire the job queue onto the app's Postgres: when DATABASE_URL is a
+# Postgres URL, the queue uses it by default (Solid Queue tables live alongside
+# the app tables). Explicit SEND_INVOICE_QUEUE_* vars still override.
+app_postgres_url = ENV["DATABASE_URL"].to_s
+app_postgres_url = nil unless app_postgres_url.start_with?("postgres://", "postgresql://")
+queue_database_url = ENV["SEND_INVOICE_QUEUE_DATABASE_URL"] || app_postgres_url
+
+explicit_queue_adapter = ENV["SEND_INVOICE_QUEUE_DB_ADAPTER"].to_s
+queue_adapter = if !explicit_queue_adapter.empty?
+                  %w[postgres postgresql pg].include?(explicit_queue_adapter) ? "postgresql" : "sqlite3"
+                elsif queue_database_url
                   "postgresql"
                 else
                   "sqlite3"
                 end
 
-queue_database_url = ENV["SEND_INVOICE_QUEUE_DATABASE_URL"]
 queue_db_host = ENV["SEND_INVOICE_QUEUE_DB_HOST"] || "127.0.0.1"
 queue_db_port = Integer(ENV.fetch("SEND_INVOICE_QUEUE_DB_PORT", "5432"), 10)
 queue_db_name = ENV["SEND_INVOICE_QUEUE_DB_NAME"]
@@ -60,7 +67,7 @@ development:
     database: <%= development_queue_database_path %>
 <% end %>
     migrations_paths: db/queue_migrate
-    schema_dump: db/queue_schema.rb
+    schema_dump: queue_schema.rb
 
 test:
   primary:
@@ -72,13 +79,18 @@ test:
     <<: *sqlite_defaults
     database: <%= test_queue_database_path %>
     migrations_paths: db/queue_migrate
-    schema_dump: db/queue_schema.rb
+    schema_dump: queue_schema.rb
 
 production:
   primary:
     <<: *default
+<% if app_postgres_url %>
+    adapter: postgresql
+    url: <%= app_postgres_url %>
+<% else %>
     <<: *sqlite_defaults
     database: <%= ENV.fetch("SEND_INVOICE_DATABASE_PATH") %>
+<% end %>
   queue:
     <<: *default
 <% if queue_adapter == "postgresql" %>
@@ -104,4 +116,4 @@ production:
     database: <%= ENV.fetch("SEND_INVOICE_QUEUE_DATABASE_PATH") %>
 <% end %>
     migrations_paths: db/queue_migrate
-    schema_dump: db/queue_schema.rb
+    schema_dump: queue_schema.rb

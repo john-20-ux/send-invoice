@@ -22,13 +22,27 @@ queue_freshness_seconds() {
   printf '%s\n' "${QUEUE_HEALTH_FRESHNESS_SECONDS:-30}"
 }
 
+# Pick the queue adapter: explicit override wins, else infer Postgres from a
+# Postgres-style SEND_INVOICE_QUEUE_DATABASE_URL or the app's DATABASE_URL.
+default_queue_adapter() {
+  local url="${SEND_INVOICE_QUEUE_DATABASE_URL:-${DATABASE_URL:-}}"
+  case "$url" in
+    postgres://*|postgresql://*) printf 'postgresql\n' ;;
+    *) printf 'sqlite3\n' ;;
+  esac
+}
+
 validate_postgres_queue_env() {
   if [[ -n "${SEND_INVOICE_QUEUE_DATABASE_URL:-}" ]]; then
     return 0
   fi
 
+  case "${DATABASE_URL:-}" in
+    postgres://*|postgresql://*) return 0 ;;
+  esac
+
   if [[ -z "${SEND_INVOICE_QUEUE_DB_NAME:-}" ]]; then
-    echo "Postgres queue mode requires SEND_INVOICE_QUEUE_DATABASE_URL or SEND_INVOICE_QUEUE_DB_NAME"
+    echo "Postgres queue mode requires SEND_INVOICE_QUEUE_DATABASE_URL, DATABASE_URL, or SEND_INVOICE_QUEUE_DB_NAME"
     return 1
   fi
 }
@@ -115,7 +129,7 @@ cd "$SIDECAR_DIR"
 export SEND_INVOICE_DATABASE_PATH="${SEND_INVOICE_DATABASE_PATH:-$ROOT_DIR/ruby_app/db/send_invoice.sqlite3}"
 export RAILS_ENV="${RAILS_ENV:-development}"
 export SOLID_QUEUE_SUPERVISOR_MODE="${SOLID_QUEUE_SUPERVISOR_MODE:-async}"
-export SEND_INVOICE_QUEUE_DB_ADAPTER="$(normalize_queue_adapter "${SEND_INVOICE_QUEUE_DB_ADAPTER:-sqlite3}")"
+export SEND_INVOICE_QUEUE_DB_ADAPTER="$(normalize_queue_adapter "${SEND_INVOICE_QUEUE_DB_ADAPTER:-$(default_queue_adapter)}")"
 
 if [[ "$SEND_INVOICE_QUEUE_DB_ADAPTER" == "sqlite3" ]]; then
   export SEND_INVOICE_QUEUE_DATABASE_PATH="${SEND_INVOICE_QUEUE_DATABASE_PATH:-$SIDECAR_DIR/storage/development_queue.sqlite3}"
