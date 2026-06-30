@@ -641,6 +641,216 @@
           width: 100%;
         }
       }
+
+      /* ---- Date Range Picker ---- */
+      .orders-filters {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        margin-top: 14px;
+      }
+
+      .drp-wrap {
+        position: relative;
+      }
+
+      .drp-label {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+        margin-bottom: 6px;
+      }
+
+      .drp-inputs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .drp-input {
+        width: 130px;
+        min-height: 36px;
+        padding: 7px 9px;
+        color: var(--text);
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font: inherit;
+      }
+
+      .drp-sep {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .drp-all-dates {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 32px;
+        padding: 0 10px;
+        margin-top: 6px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: #ffffff;
+        color: var(--muted);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .drp-all-dates:hover {
+        background: var(--bg);
+      }
+
+      .drp-panel {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 100;
+        display: none;
+        flex-direction: row;
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .drp-panel.is-open {
+        display: flex;
+      }
+
+      .drp-presets {
+        display: flex;
+        flex-direction: column;
+        padding: 10px 8px;
+        border-right: 1px solid var(--line);
+        gap: 2px;
+        min-width: 148px;
+      }
+
+      .drp-preset-btn {
+        display: flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 0 10px;
+        border: none;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .drp-preset-btn:hover {
+        background: var(--bg);
+      }
+
+      .drp-cal-area {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .drp-calendars {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .drp-cal {
+        padding: 0 10px;
+      }
+
+      .drp-cal + .drp-cal {
+        border-left: 1px solid var(--line-soft);
+      }
+
+      .drp-cal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+
+      .drp-cal-header strong {
+        font-size: 14px;
+        font-weight: 720;
+      }
+
+      .drp-nav-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: #ffffff;
+        color: var(--text);
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .drp-nav-btn:hover {
+        background: var(--bg);
+      }
+
+      .drp-nav-spacer {
+        width: 28px;
+      }
+
+      .drp-cal-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 2px;
+      }
+
+      .drp-day-label {
+        text-align: center;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+        letter-spacing: 0.02em;
+        padding: 4px 0 8px;
+      }
+
+      .drp-day {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 32px;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .drp-day:not(.drp-day-empty):hover {
+        background: var(--bg);
+      }
+
+      .drp-day.is-today {
+        border-color: var(--line);
+        font-weight: 720;
+      }
+
+      .drp-day.drp-day-empty {
+        cursor: default;
+      }
+
+      .drp-panel-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 10px 16px;
+      }
     </style>
   </head>
   <body>
@@ -763,18 +973,83 @@
               </div>
               <button class="button">Sync</button>
             </div>
-            <div class="grid-three" style="margin-top:14px">
+            <div class="orders-filters">
               <div class="field">
                 <label>Search</label>
                 <input value="#1042">
               </div>
-              <div class="field">
-                <label>From</label>
-                <input type="date" value="2026-06-01">
-              </div>
-              <div class="field">
-                <label>To</label>
-                <input type="date" value="2026-06-23">
+              <div class="drp-wrap" id="drp">
+                <span class="drp-label">Date range</span>
+                <div class="drp-inputs">
+                  <input class="drp-input" id="drp-from" value="28/06/2026" readonly>
+                  <span class="drp-sep">to</span>
+                  <input class="drp-input" id="drp-to" value="28/06/2026" readonly>
+                  <button class="button">Apply</button>
+                  <button class="button-ghost">Clear</button>
+                </div>
+                <button class="drp-all-dates" id="drp-trigger">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="1" y="3" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M1 7h14" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M5 1v4M11 1v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                  All dates
+                </button>
+
+                <div class="drp-panel" id="drp-panel">
+                  <div class="drp-presets">
+                    <button class="drp-preset-btn">Today</button>
+                    <button class="drp-preset-btn">Yesterday</button>
+                    <button class="drp-preset-btn">Last 7 days</button>
+                    <button class="drp-preset-btn">Last 30 days</button>
+                    <button class="drp-preset-btn">This month</button>
+                    <button class="drp-preset-btn">Last month</button>
+                    <button class="drp-preset-btn">This year</button>
+                  </div>
+                  <div class="drp-cal-area">
+                    <div class="drp-calendars">
+
+                      <!-- Left calendar: June 2026 — ‹ prev arrow on LEFT -->
+                      <div class="drp-cal">
+                        <div class="drp-cal-header">
+                          <button class="drp-nav-btn" id="drp-prev">&#8249;</button>
+                          <strong>June 2026</strong>
+                          <span class="drp-nav-spacer"></span>
+                        </div>
+                        <div class="drp-cal-grid">
+                          <span class="drp-day-label">Mo</span><span class="drp-day-label">Tu</span><span class="drp-day-label">We</span><span class="drp-day-label">Th</span><span class="drp-day-label">Fr</span><span class="drp-day-label">Sa</span><span class="drp-day-label">Su</span>
+                          <span class="drp-day">1</span><span class="drp-day">2</span><span class="drp-day">3</span><span class="drp-day">4</span><span class="drp-day">5</span><span class="drp-day">6</span><span class="drp-day">7</span>
+                          <span class="drp-day">8</span><span class="drp-day">9</span><span class="drp-day">10</span><span class="drp-day">11</span><span class="drp-day">12</span><span class="drp-day">13</span><span class="drp-day">14</span>
+                          <span class="drp-day">15</span><span class="drp-day">16</span><span class="drp-day">17</span><span class="drp-day">18</span><span class="drp-day">19</span><span class="drp-day">20</span><span class="drp-day">21</span>
+                          <span class="drp-day">22</span><span class="drp-day">23</span><span class="drp-day">24</span><span class="drp-day">25</span><span class="drp-day">26</span><span class="drp-day">27</span><span class="drp-day is-today">28</span>
+                          <span class="drp-day">29</span><span class="drp-day">30</span>
+                        </div>
+                      </div>
+
+                      <!-- Right calendar: July 2026 — › next arrow on RIGHT -->
+                      <div class="drp-cal">
+                        <div class="drp-cal-header">
+                          <span class="drp-nav-spacer"></span>
+                          <strong>July 2026</strong>
+                          <button class="drp-nav-btn" id="drp-next">&#8250;</button>
+                        </div>
+                        <div class="drp-cal-grid">
+                          <span class="drp-day-label">Mo</span><span class="drp-day-label">Tu</span><span class="drp-day-label">We</span><span class="drp-day-label">Th</span><span class="drp-day-label">Fr</span><span class="drp-day-label">Sa</span><span class="drp-day-label">Su</span>
+                          <span class="drp-day drp-day-empty"></span><span class="drp-day drp-day-empty"></span><span class="drp-day">1</span><span class="drp-day">2</span><span class="drp-day">3</span><span class="drp-day">4</span><span class="drp-day">5</span>
+                          <span class="drp-day">6</span><span class="drp-day">7</span><span class="drp-day">8</span><span class="drp-day">9</span><span class="drp-day">10</span><span class="drp-day">11</span><span class="drp-day">12</span>
+                          <span class="drp-day">13</span><span class="drp-day">14</span><span class="drp-day">15</span><span class="drp-day">16</span><span class="drp-day">17</span><span class="drp-day">18</span><span class="drp-day">19</span>
+                          <span class="drp-day">20</span><span class="drp-day">21</span><span class="drp-day">22</span><span class="drp-day">23</span><span class="drp-day">24</span><span class="drp-day">25</span><span class="drp-day">26</span>
+                          <span class="drp-day">27</span><span class="drp-day">28</span><span class="drp-day">29</span><span class="drp-day">30</span><span class="drp-day">31</span>
+                        </div>
+                      </div>
+
+                    </div>
+                    <div class="drp-panel-footer">
+                      <button class="button-ghost">Clear</button>
+                      <button class="button">Apply</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -976,5 +1251,29 @@
         </section>
       </main>
     </div>
+    <script>
+      (function () {
+        var trigger = document.getElementById("drp-trigger");
+        var panel   = document.getElementById("drp-panel");
+        if (!trigger || !panel) return;
+
+        trigger.addEventListener("click", function (e) {
+          e.stopPropagation();
+          panel.classList.toggle("is-open");
+        });
+
+        document.addEventListener("click", function (e) {
+          if (!document.getElementById("drp").contains(e.target)) {
+            panel.classList.remove("is-open");
+          }
+        });
+
+        panel.querySelectorAll(".drp-panel-footer .button, .drp-panel-footer .button-ghost").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            panel.classList.remove("is-open");
+          });
+        });
+      })();
+    </script>
   </body>
 </html>
