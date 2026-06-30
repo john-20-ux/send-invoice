@@ -990,16 +990,20 @@ module SendInvoice
     # subscription. Confirm it's ACTIVE before granting the plan.
     def handle_plan_callback
       shop = require_onboarded_shop
-      requested_plan = single_value(params["plan"]).to_s
       active = @shopify_client.active_subscription(shop["shop_domain"], shop["access_token"])
 
-      if active
-        plan_id = BILLING_PLANS.key?(requested_plan) ? requested_plan : (active["name"].to_s.downcase.include?("pro") ? "pro" : "basic")
+      # Security: derive the plan ONLY from the subscription Shopify actually
+      # activated, and confirm it is the exact subscription we created at
+      # checkout. Never trust the `plan` URL param — otherwise a merchant could
+      # buy Basic and request Pro entitlements.
+      plan_id = active && BILLING_PLANS.find { |_, plan| active["name"].to_s.include?(plan["name"]) }&.first
+
+      if plan_id && active["id"] == shop["subscription_id"]
         @store.update_shop(shop["shop_domain"], "current_plan" => plan_id, "plan_status" => "active", "subscription_id" => active["id"])
-        flash!("info", "#{BILLING_PLANS.fetch(plan_id, { 'name' => plan_id })['name']} plan is now active.")
+        flash!("info", "#{BILLING_PLANS[plan_id]['name']} plan is now active.")
       else
         @store.update_shop(shop["shop_domain"], "plan_status" => "none")
-        flash!("error", "The subscription was not approved.")
+        flash!("error", "We couldn't confirm an approved subscription for this plan.")
       end
       redirect_to("/settings/plans")
     rescue StandardError => e
