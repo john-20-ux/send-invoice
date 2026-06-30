@@ -4,6 +4,7 @@ module SendInvoice
   class Migrator
     def initialize(database)
       @database = database
+      @postgres = database.respond_to?(:postgres?) && database.postgres?
     end
 
     def run
@@ -263,6 +264,11 @@ module SendInvoice
     private
 
     def ensure_column(db, table, column, definition)
+      if @postgres
+        db.execute("ALTER TABLE #{table} ADD COLUMN IF NOT EXISTS #{column} #{definition}")
+        return
+      end
+
       columns = db.execute("PRAGMA table_info(#{table})").map { |row| row["name"] || row[1] }
       return if columns.include?(column)
 
@@ -270,6 +276,10 @@ module SendInvoice
     end
 
     def normalize_shop_domain_storage(db)
+      # SQLite-only cleanup of legacy blob shop_domains (typeof/rowid); a fresh
+      # Postgres database has none of this.
+      return if @postgres
+
       child_tables = %w[
         orders
         sync_logs

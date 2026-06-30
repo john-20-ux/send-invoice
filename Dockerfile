@@ -12,7 +12,7 @@ WORKDIR /app
 # Native extension build deps for sqlite3; removed from the final layer is not
 # trivial in a single-stage build, so keep the image slim by cleaning apt lists.
 RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends build-essential libsqlite3-dev \
+    && apt-get install -y --no-install-recommends build-essential libsqlite3-dev libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install gems first so dependency layers cache across app code changes.

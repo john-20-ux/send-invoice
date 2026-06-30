@@ -14,8 +14,12 @@ services:
         value: "0.0.0.0"
       - key: HOST
         sync: false
-      - key: DATABASE_PATH
-        value: /var/data/send_invoice.sqlite3
+      # Managed Postgres connection string (provisioned below). The app uses
+      # Postgres whenever DATABASE_URL is set, SQLite otherwise.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: send-invoice-db
+          property: connectionString
       - key: MOCK_MODE
         value: "false"
       - key: SHOPIFY_API_KEY
@@ -48,7 +52,9 @@ services:
         value: "0"
       - key: BILLING_TEST
         value: "true"
-    disk:
-      name: send-invoice-staging-data
-      mountPath: /var/data
-      sizeGB: 5
+
+databases:
+  - name: send-invoice-db
+    databaseName: send_invoice
+    user: send_invoice
+    plan: basic-256mb
