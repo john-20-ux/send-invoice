@@ -54,13 +54,15 @@
       </button>
       <div class="template-preset-grid">
         <% template_options.each do |value, label| %>
+          <% locked = @allowed_templates && !@allowed_templates.include?(value) %>
           <button
-            class="template-preset <%= "is-active" if @invoice_config["template"] == value %>"
+            class="template-preset <%= "is-active" if @invoice_config["template"] == value %><%= " is-locked" if locked %>"
             type="button"
             data-template-choice="<%= value %>"
+            <%= "disabled" if locked %>
           >
             <span class="template-preset-name"><%= label %></span>
-            <span class="template-preset-meta"><%= value %></span>
+            <span class="template-preset-meta"><%= locked ? "Upgrade to unlock" : value %></span>
           </button>
         <% end %>
       </div>

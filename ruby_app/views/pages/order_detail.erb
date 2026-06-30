@@ -73,7 +73,9 @@
             <p class="eyebrow">Invoice delivery</p>
             <h3>Send invoice</h3>
             <p class="section-note">
-              <% if @invoice_delivery_mode == "smtp" %>
+              <% if !@can_email_invoice %>
+                Email delivery isn't included on the Free plan. Use <strong>Download PDF</strong> above, or upgrade to email invoices.
+              <% elsif @invoice_delivery_mode == "smtp" %>
                 Direct email delivery is enabled through SMTP.
               <% else %>
                 Direct SMTP is not configured yet. Sent invoices are saved to the local outbox.
@@ -82,6 +84,14 @@
           </div>
         </div>
 
+        <% unless @can_email_invoice %>
+          <div class="button-inline" style="margin-top:20px">
+            <a class="button" href="<%= order_invoice_pdf_path(@selected_order["id"], @shop["shop_domain"]) %>">Download PDF</a>
+            <a class="button-ghost" href="/settings/plans">Upgrade to email</a>
+          </div>
+        <% end %>
+
+        <% if @can_email_invoice %>
         <form method="post" action="<%= order_send_invoice_path(@selected_order["id"], @shop["shop_domain"]) %>" class="stack" style="margin-top:20px">
           <div class="grid-two">
             <div class="field">
@@ -105,6 +115,7 @@
             <button class="button" type="submit">Send invoice</button>
           </div>
         </form>
+        <% end %>
       </section>
 
       <section class="table-shell">

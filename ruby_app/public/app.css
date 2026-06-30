@@ -1375,6 +1375,21 @@ html.nav-rail .sidebar-toggle {
   background: var(--accent-weak);
 }
 
+/* Templates not included in the merchant's plan. */
+.template-preset.is-locked {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.template-preset.is-locked:hover {
+  border-color: var(--line);
+  background: transparent;
+}
+
+.template-preset.is-locked .template-preset-meta {
+  color: var(--accent);
+}
+
 .template-preset-name {
   font-weight: 760;
 }

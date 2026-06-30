@@ -48,19 +48,25 @@ module SendInvoice
       "free" => {
         "name" => "Free", "amount" => 0.0, "currency" => "USD", "invoice_limit" => 10,
         "data_window_days" => 30, "tagline" => "Try it out",
-        "features" => ["Up to 10 invoices per month", "Last 30 days of data", "Download & print invoices"]
+        "email_delivery" => false, "templates" => %w[classic minimal clean],
+        "features" => ["Up to 10 invoices per month", "Last 30 days of data", "3 invoice templates", "Download & print invoices"]
       },
       "basic" => {
         "name" => "Basic", "amount" => 5.0, "currency" => "USD", "invoice_limit" => 50,
         "data_window_days" => nil, "tagline" => "For getting started",
-        "features" => ["50 invoices per month", "Full order history", "Automated schedules", "Email delivery", "3 invoice templates", "Email support"]
+        "email_delivery" => true, "templates" => %w[classic modern minimal bold],
+        "features" => ["50 invoices per month", "Full order history", "Automated schedules", "Email delivery", "4 invoice templates", "Email support"]
       },
       "pro" => {
         "name" => "Pro", "amount" => 13.0, "currency" => "USD", "invoice_limit" => nil,
         "data_window_days" => nil, "tagline" => "Unlimited everything",
+        "email_delivery" => true, "templates" => nil,
         "features" => ["Unlimited invoice exports", "Full order history", "Automated schedules", "Email delivery", "All invoice templates", "Email & live chat support"]
       }
     }.freeze
+
+    # The full set of invoice templates (ids must match invoice_templates.erb).
+    INVOICE_TEMPLATE_IDS = %w[classic modern minimal bold clean compact editorial ledger luxe mono].freeze
 
     class TemplateContext
       include ViewHelpers
@@ -569,6 +575,12 @@ module SendInvoice
         return
       end
 
+      unless plan_allows_email?(shop)
+        flash!("error", "Email delivery isn't included on the Free plan. Use Download PDF, or upgrade to email invoices.")
+        redirect_to(order_detail_path(order["id"], shop["shop_domain"]))
+        return
+      end
+
       draft = invoice_delivery_draft_for(shop, order)
       recipient_email = single_value(params["recipient_email"]).to_s.strip
       subject = single_value(params["email_subject"]).to_s.strip
@@ -836,13 +848,21 @@ module SendInvoice
         current_path: @request.path,
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
-        invoice_config: merged_invoice_config(shop)
+        invoice_config: merged_invoice_config(shop),
+        allowed_templates: allowed_template_ids(shop)
       })
     end
 
     def handle_invoice_template_save
       shop = require_onboarded_shop
       config = merged_invoice_config(shop)
+
+      chosen_template = single_value(params["template"]).to_s
+      unless template_allowed?(shop, chosen_template)
+        flash!("error", "The #{chosen_template.capitalize} template isn't available on your plan. Upgrade to unlock more templates.")
+        redirect_to("/invoice-templates")
+        return
+      end
 
       %w[
         template currency_symbol company_name tagline address phone email website gst
@@ -1657,9 +1677,14 @@ module SendInvoice
     end
 
     def merged_invoice_config(shop)
-      normalize_invoice_config(
+      config = normalize_invoice_config(
         deep_merge(MockData::DEFAULT_INVOICE_TEMPLATE_CONFIG, shop["invoice_template_config"] || {})
       )
+      # Enforce the plan's template allowance even if a premium template was
+      # saved on a higher tier before downgrading.
+      allowed = allowed_template_ids(shop)
+      config["template"] = allowed.first if allowed && !allowed.include?(config["template"].to_s)
+      config
     end
 
     def merged_notification_config(shop)
@@ -1701,6 +1726,7 @@ module SendInvoice
         selected_order_invoice_document: invoice_document_for(shop, order).payload,
         selected_order_invoice_draft: invoice_delivery_draft_for(shop, order),
         invoice_delivery_mode: invoice_delivery_mode_label,
+        can_email_invoice: plan_allows_email?(shop),
         order_back_path: query_path("/orders", { "shop" => shop["shop_domain"] })
       }
     end
@@ -1816,6 +1842,25 @@ module SendInvoice
       return BILLING_PLANS[plan]["invoice_limit"] if plan && BILLING_PLANS.key?(plan)
 
       0
+    end
+
+    # Whether the plan includes emailing invoices (Free is download-only).
+    def plan_allows_email?(shop)
+      plan = effective_plan(shop)
+      return true unless plan && BILLING_PLANS.key?(plan) # trial / unknown -> allowed
+
+      BILLING_PLANS[plan]["email_delivery"] != false
+    end
+
+    # Template ids the plan may use, or nil for all of them (Pro / trial).
+    def allowed_template_ids(shop)
+      plan = effective_plan(shop)
+      (plan && BILLING_PLANS.key?(plan)) ? BILLING_PLANS[plan]["templates"] : nil
+    end
+
+    def template_allowed?(shop, template_id)
+      allowed = allowed_template_ids(shop)
+      allowed.nil? || allowed.include?(template_id.to_s)
     end
 
     # Oldest date (YYYY-MM-DD) the plan may view, or nil for full history.
