@@ -24,17 +24,17 @@ module SendInvoice
     class NotFoundError < StandardError; end
 
     NAV_ITEMS = [
-      { "label" => "Home", "path" => "/dashboard" },
-      { "label" => "Orders", "path" => "/orders" },
-      { "label" => "Vendors", "path" => "/vendors" },
-      { "label" => "Invoice Templates", "path" => "/invoice-templates" },
-      { "label" => "Notifications", "path" => "/notifications" },
-      { "label" => "Settings", "path" => "/settings" },
-      { "label" => "Support", "path" => "/support" }
+      { "label" => "Home", "path" => "/dashboard", "key" => "home" },
+      { "label" => "Orders", "path" => "/orders", "key" => "orders" },
+      { "label" => "Vendors", "path" => "/vendors", "key" => "vendors" },
+      { "label" => "Invoice Templates", "path" => "/invoice-templates", "key" => "invoice_templates" },
+      { "label" => "Notifications", "path" => "/notifications", "key" => "notifications" },
+      { "label" => "Settings", "path" => "/settings", "key" => "settings" },
+      { "label" => "Support", "path" => "/support", "key" => "support" }
     ].freeze
 
     ADMIN_NAV_ITEMS = [
-      { "label" => "Queue Ops", "path" => "/queue-ops" }
+      { "label" => "Queue Ops", "path" => "/queue-ops", "key" => "queue_ops" }
     ].freeze
 
     ASYNC_REQUEST_STATUSES = %w[queued claimed dispatched running completed failed].freeze

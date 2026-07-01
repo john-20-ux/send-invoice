@@ -1,4 +1,23 @@
 en:
+  nav:
+    home: "Home"
+    orders: "Orders"
+    vendors: "Vendors"
+    invoice_templates: "Invoice Templates"
+    notifications: "Notifications"
+    settings: "Settings"
+    support: "Support"
+    queue_ops: "Queue Ops"
+  common:
+    brand_subtitle: "Orders and payouts"
+    admin: "Admin"
+    reauth_message: "This app needs additional permissions to keep working. Please reauthorize."
+    reauth_button: "Reauthorize"
+  trial_banner:
+    expires:
+      one: "Your free trial expires in <strong>%{count}</strong> day."
+      other: "Your free trial expires in <strong>%{count}</strong> days."
+    upgrade: "Upgrade now"
   plans:
     title: "Plans & billing"
     per_month: "/mo"

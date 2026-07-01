@@ -1,4 +1,23 @@
 es:
+  nav:
+    home: "Inicio"
+    orders: "Pedidos"
+    vendors: "Proveedores"
+    invoice_templates: "Plantillas de factura"
+    notifications: "Notificaciones"
+    settings: "Configuración"
+    support: "Soporte"
+    queue_ops: "Operaciones de cola"
+  common:
+    brand_subtitle: "Pedidos y pagos"
+    admin: "Administración"
+    reauth_message: "Esta app necesita permisos adicionales para seguir funcionando. Vuelve a autorizarla."
+    reauth_button: "Volver a autorizar"
+  trial_banner:
+    expires:
+      one: "Tu prueba gratuita vence en <strong>%{count}</strong> día."
+      other: "Tu prueba gratuita vence en <strong>%{count}</strong> días."
+    upgrade: "Mejorar ahora"
   plans:
     title: "Planes y facturación"
     per_month: "/mes"

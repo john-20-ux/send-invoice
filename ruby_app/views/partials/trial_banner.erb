@@ -2,7 +2,7 @@
   <% elapsed = ((Time.now - Time.parse(@shop["trial_started_at"])) / 86_400).floor %>
   <% remaining = [14 - elapsed, 0].max %>
   <div class="trial-banner">
-    <span>Your free trial expires in <strong><%= remaining %></strong> day<%= remaining == 1 ? "" : "s" %>.</span>
-    <a href="/settings/plans">Upgrade now</a>
+    <span><%= t("trial_banner.expires", count: remaining) %></span>
+    <a href="/settings/plans"><%= t("trial_banner.upgrade") %></a>
   </div>
 <% end %>

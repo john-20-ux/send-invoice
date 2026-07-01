@@ -1,4 +1,23 @@
 ta:
+  nav:
+    home: "முகப்பு"
+    orders: "ஆர்டர்கள்"
+    vendors: "விற்பனையாளர்கள்"
+    invoice_templates: "விலைப்பட்டியல் வார்ப்புருக்கள்"
+    notifications: "அறிவிப்புகள்"
+    settings: "அமைப்புகள்"
+    support: "ஆதரவு"
+    queue_ops: "வரிசை செயல்பாடுகள்"
+  common:
+    brand_subtitle: "ஆர்டர்களும் பேமெண்ட்களும்"
+    admin: "நிர்வாகம்"
+    reauth_message: "இந்த ஆப் தொடர்ந்து இயங்க கூடுதல் அனுமதிகள் தேவை. மீண்டும் அங்கீகரிக்கவும்."
+    reauth_button: "மீண்டும் அங்கீகரி"
+  trial_banner:
+    expires:
+      one: "உங்கள் இலவச சோதனை <strong>%{count}</strong> நாளில் காலாவதியாகும்."
+      other: "உங்கள் இலவச சோதனை <strong>%{count}</strong> நாட்களில் காலாவதியாகும்."
+    upgrade: "இப்போது மேம்படுத்து"
   plans:
     title: "திட்டங்கள் & பில்லிங்"
     per_month: "/மாதம்"
