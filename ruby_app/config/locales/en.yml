@@ -1,0 +1,43 @@
+en:
+  plans:
+    title: "Plans & billing"
+    per_month: "/mo"
+    choose: "Choose %{name}"
+    current_plan: "Current plan"
+    tags:
+      current: "✓ Current"
+      recommended: "Recommended"
+      popular: "Popular"
+    note:
+      active_metered: "You're on the <strong>%{plan}</strong> plan. Used <strong>%{used}</strong> of <strong>%{limit}</strong> invoices this month."
+      active_unlimited: "You're on the <strong>%{plan}</strong> plan. Unlimited invoice exports."
+      trial:
+        one: "You're on a free trial — <strong>%{count}</strong> day left, all features included. Choose a plan to keep going after it ends."
+        other: "You're on a free trial — <strong>%{count}</strong> days left, all features included. Choose a plan to keep going after it ends."
+      ended: "Your free trial has ended. Choose a plan to keep sending invoices."
+    tiers:
+      free:
+        tagline: "Try it out"
+        features:
+          - "Up to 10 invoices per month"
+          - "Last 30 days of data"
+          - "1 invoice template"
+          - "Download & print invoices"
+      basic:
+        tagline: "For getting started"
+        features:
+          - "50 invoices per month"
+          - "Full order history"
+          - "Automated schedules"
+          - "Email delivery"
+          - "4 invoice templates"
+          - "Email support"
+      pro:
+        tagline: "Unlimited everything"
+        features:
+          - "Unlimited invoice exports"
+          - "Full order history"
+          - "Automated schedules"
+          - "Email delivery"
+          - "All invoice templates"
+          - "Email & live chat support"

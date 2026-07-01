@@ -9,6 +9,7 @@ require "uri"
 require "webrick"
 
 require "send_invoice/error_reporter"
+require "send_invoice/localization"
 require "send_invoice/view_helpers"
 require "send_invoice/invoice_document"
 require "send_invoice/invoice_mailer"
@@ -47,21 +48,15 @@ module SendInvoice
     BILLING_PLANS = {
       "free" => {
         "name" => "Free", "amount" => 0.0, "currency" => "USD", "invoice_limit" => 10,
-        "data_window_days" => 30, "tagline" => "Try it out",
-        "email_delivery" => false, "templates" => %w[classic],
-        "features" => ["Up to 10 invoices per month", "Last 30 days of data", "1 invoice template", "Download & print invoices"]
+        "data_window_days" => 30, "email_delivery" => false, "templates" => %w[classic]
       },
       "basic" => {
         "name" => "Basic", "amount" => 5.0, "currency" => "USD", "invoice_limit" => 50,
-        "data_window_days" => nil, "tagline" => "For getting started",
-        "email_delivery" => true, "templates" => %w[classic modern minimal bold],
-        "features" => ["50 invoices per month", "Full order history", "Automated schedules", "Email delivery", "4 invoice templates", "Email support"]
+        "data_window_days" => nil, "email_delivery" => true, "templates" => %w[classic modern minimal bold]
       },
       "pro" => {
         "name" => "Pro", "amount" => 13.0, "currency" => "USD", "invoice_limit" => nil,
-        "data_window_days" => nil, "tagline" => "Unlimited everything",
-        "email_delivery" => true, "templates" => nil,
-        "features" => ["Unlimited invoice exports", "Full order history", "Automated schedules", "Email delivery", "All invoice templates", "Email & live chat support"]
+        "data_window_days" => nil, "email_delivery" => true, "templates" => nil
       }
     }.freeze
 
@@ -96,6 +91,7 @@ module SendInvoice
         webhook_url: @config.error_webhook_url,
         environment: @config.app_env
       )
+      Localization.setup!(File.join(@config.app_root, "config", "locales", "*.yml"))
     end
 
     # Structured (JSON-per-line) logger to stdout for easy aggregation.
@@ -123,7 +119,7 @@ module SendInvoice
       @response["X-Frame-Options"] = "DENY"
       load_session unless webhook_request?
 
-      route!
+      I18n.with_locale(request_locale) { route! }
     rescue UnauthorizedError => e
       if api_request? || webhook_request?
         respond_json({ error: e.message }, status: 401)
@@ -170,6 +166,18 @@ module SendInvoice
       ))
     rescue StandardError
       # Logging must never break a response.
+    end
+
+    # Resolve the request's UI language: an explicit ?locale= (Shopify appends
+    # one), then the Accept-Language header, else the default locale.
+    def request_locale
+      Localization.resolve(single_value(params["locale"]), accept_language)
+    rescue StandardError
+      Localization::DEFAULT_LOCALE
+    end
+
+    def accept_language
+      header_value("accept-language").to_s.split(",").first.to_s.split(";").first
     end
 
     # Only allow safe characters from an inbound request id (defense against
@@ -1785,15 +1793,14 @@ module SendInvoice
     end
 
     def plan_definitions
+      # Structural data only; display text (tagline, features, period) is
+      # localized in the view via i18n keyed by plan id.
       BILLING_PLANS.map do |id, plan|
         {
           "id" => id,
           "name" => plan["name"],
           "price" => "$#{format('%g', plan['amount'])}",
-          "period" => "/mo",
-          "tagline" => plan["tagline"],
-          "popular" => id == "pro",
-          "features" => plan["features"]
+          "popular" => id == "pro"
         }
       end
     end

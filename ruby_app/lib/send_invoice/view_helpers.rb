@@ -2,11 +2,18 @@
 
 require "cgi"
 require "erb"
+require "i18n"
 require "time"
 require "uri"
 
 module SendInvoice
   module ViewHelpers
+    # Translate a key for the current locale. Values may contain trusted HTML
+    # (e.g. <strong>); interpolate with keyword args: t("plans.choose", name: x).
+    def t(key, **options)
+      I18n.t(key, **options)
+    end
+
     CURRENCY_SYMBOLS = {
       "USD" => "$",
       "EUR" => "EUR ",

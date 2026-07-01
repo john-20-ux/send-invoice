@@ -4,6 +4,7 @@ source "https://rubygems.org"
 
 gem "sqlite3", ">= 1.6", "< 3.0"
 gem "pg", "~> 1.6"
+gem "i18n", "~> 1.14"
 gem "minitest"
 gem "rake"
 gem "webrick"

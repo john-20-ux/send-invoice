@@ -1,0 +1,43 @@
+es:
+  plans:
+    title: "Planes y facturación"
+    per_month: "/mes"
+    choose: "Elegir %{name}"
+    current_plan: "Plan actual"
+    tags:
+      current: "✓ Actual"
+      recommended: "Recomendado"
+      popular: "Popular"
+    note:
+      active_metered: "Estás en el plan <strong>%{plan}</strong>. Has usado <strong>%{used}</strong> de <strong>%{limit}</strong> facturas este mes."
+      active_unlimited: "Estás en el plan <strong>%{plan}</strong>. Exportaciones de facturas ilimitadas."
+      trial:
+        one: "Estás en una prueba gratuita — queda <strong>%{count}</strong> día, con todas las funciones. Elige un plan para continuar cuando termine."
+        other: "Estás en una prueba gratuita — quedan <strong>%{count}</strong> días, con todas las funciones. Elige un plan para continuar cuando termine."
+      ended: "Tu prueba gratuita ha terminado. Elige un plan para seguir enviando facturas."
+    tiers:
+      free:
+        tagline: "Pruébalo"
+        features:
+          - "Hasta 10 facturas por mes"
+          - "Últimos 30 días de datos"
+          - "1 plantilla de factura"
+          - "Descargar e imprimir facturas"
+      basic:
+        tagline: "Para empezar"
+        features:
+          - "50 facturas por mes"
+          - "Historial completo de pedidos"
+          - "Programaciones automáticas"
+          - "Envío por correo"
+          - "4 plantillas de factura"
+          - "Soporte por correo"
+      pro:
+        tagline: "Todo ilimitado"
+        features:
+          - "Exportaciones de facturas ilimitadas"
+          - "Historial completo de pedidos"
+          - "Programaciones automáticas"
+          - "Envío por correo"
+          - "Todas las plantillas de factura"
+          - "Soporte por correo y chat en vivo"

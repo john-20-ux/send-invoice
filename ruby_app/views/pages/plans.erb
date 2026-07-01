@@ -1,22 +1,15 @@
 <section class="section-card">
-  <h2>Plans &amp; billing</h2>
+  <h2><%= t("plans.title") %></h2>
   <% if @plan_status == "active" && @active_plan %>
-    <p class="section-note">
-      You're on the <strong><%= h(@active_plan.capitalize) %></strong> plan.
-      <% if @invoice_limit %>
-        Used <strong><%= @invoice_usage %></strong> of <strong><%= @invoice_limit %></strong> invoices this month.
-      <% else %>
-        Unlimited invoice exports.
-      <% end %>
-    </p>
+    <% if @invoice_limit %>
+      <p class="section-note"><%= t("plans.note.active_metered", plan: @active_plan.capitalize, used: @invoice_usage, limit: @invoice_limit) %></p>
+    <% else %>
+      <p class="section-note"><%= t("plans.note.active_unlimited", plan: @active_plan.capitalize) %></p>
+    <% end %>
   <% elsif @trial_active %>
-    <p class="section-note">
-      You're on a free trial — <strong><%= @trial_days_remaining %></strong>
-      day<%= @trial_days_remaining == 1 ? "" : "s" %> left, all features included.
-      Choose a plan to keep going after it ends.
-    </p>
+    <p class="section-note"><%= t("plans.note.trial", count: @trial_days_remaining) %></p>
   <% else %>
-    <p class="section-note">Your free trial has ended. Choose a plan to keep sending invoices.</p>
+    <p class="section-note"><%= t("plans.note.ended") %></p>
   <% end %>
 </section>
 
@@ -25,26 +18,26 @@
     <% any_active = (@plan_status == "active") %>
     <% active = any_active && @active_plan == plan["id"] %>
     <% recommend = !any_active && plan["popular"] %>
-    <% band_tag = active ? "✓ Current" : (recommend ? "Recommended" : (plan["popular"] ? "Popular" : nil)) %>
+    <% band_tag = active ? t("plans.tags.current") : (recommend ? t("plans.tags.recommended") : (plan["popular"] ? t("plans.tags.popular") : nil)) %>
     <article class="section-card plan-card <%= "is-active" if active %><%= " is-recommended" if recommend %>">
       <div class="plan-band">
         <span class="plan-name"><%= h(plan["name"]) %></span>
         <% if band_tag %><span class="plan-tag"><%= band_tag %></span><% end %>
       </div>
-      <p class="muted plan-tagline"><%= h(plan["tagline"]) %></p>
-      <p class="value plan-price"><%= h(plan["price"]) %><small><%= h(plan["period"]) %></small></p>
+      <p class="muted plan-tagline"><%= t("plans.tiers.#{plan["id"]}.tagline") %></p>
+      <p class="value plan-price"><%= h(plan["price"]) %><small><%= t("plans.per_month") %></small></p>
       <ul class="stack plan-features">
-        <% plan["features"].each do |feature| %>
+        <% Array(t("plans.tiers.#{plan["id"]}.features")).each do |feature| %>
           <li><%= h(feature) %></li>
         <% end %>
       </ul>
       <div class="button-inline">
         <% if active %>
-          <span class="button is-current">✓ Current plan</span>
+          <span class="button is-current"><%= t("plans.current_plan") %></span>
         <% else %>
           <form method="post" action="/settings/plans">
             <input type="hidden" name="plan" value="<%= h(plan["id"]) %>">
-            <button class="button" type="submit">Choose <%= h(plan["name"]) %></button>
+            <button class="button" type="submit"><%= t("plans.choose", name: plan["name"]) %></button>
           </form>
         <% end %>
       </div>
