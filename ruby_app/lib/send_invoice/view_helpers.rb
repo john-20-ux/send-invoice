@@ -16,7 +16,19 @@ module SendInvoice
 
     def format_money(amount, currency = "USD")
       symbol = CURRENCY_SYMBOLS.fetch(currency.to_s, "#{currency} ")
-      "#{symbol}#{format('%.2f', amount.to_f)}"
+      value = amount.to_f
+      sign = value.negative? ? "-" : ""
+      "#{sign}#{symbol}#{group_thousands(format('%.2f', value.abs))}"
+    end
+
+    # Add thousands separators to a plain decimal string ("2354.73" -> "2,354.73").
+    def group_thousands(value)
+      whole, fraction = value.to_s.split(".")
+      negative = whole.start_with?("-")
+      whole = whole.delete_prefix("-")
+      whole = whole.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
+      grouped = fraction ? "#{whole}.#{fraction}" : whole
+      negative ? "-#{grouped}" : grouped
     end
 
     def format_date(value)
