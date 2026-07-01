@@ -1,53 +1,235 @@
-<div class="grid-four">
-  <article class="metric-card">
-    <p class="label">Total orders</p>
-    <p class="value"><%= @stats["total_orders"] %></p>
-  </article>
-  <article class="metric-card">
-    <p class="label">Total revenue</p>
-    <p class="value"><%= format_money(@stats["total_revenue"], "USD") %></p>
-  </article>
-  <article class="metric-card">
-    <p class="label">Paid orders</p>
-    <p class="value"><%= @stats["paid_orders"] %></p>
-  </article>
-  <article class="metric-card">
-    <p class="label">Fulfilled</p>
-    <p class="value"><%= @stats["fulfilled"] %></p>
-  </article>
-</div>
+<%
+  # Area-chart geometry for the last 30 days of revenue. Points are mapped into
+  # a fixed viewBox and scaled by the peak day so the curve always fills nicely.
+  chart_w = 700.0
+  chart_h = 150.0
+  points = @daily_points
+  peak = [points.map { |p| p["revenue"] }.max.to_f, 1].max
+  count = points.length
+  coords = points.each_with_index.map do |point, index|
+    x = count <= 1 ? 0.0 : (index.to_f / (count - 1) * chart_w)
+    y = chart_h - (point["revenue"] / peak * (chart_h - 10)) - 4
+    [x.round(1), y.round(1)]
+  end
+  curve = smooth_path(coords, chart_h)
+%>
+<div class="dashboard">
+  <header class="home-head">
+    <div>
+      <h1 class="home-title">Overview</h1>
+      <p class="home-sub"><%= h(@shop["shop_domain"]) %></p>
+    </div>
+    <div class="home-actions">
+      <form method="post" action="/orders/sync">
+        <button class="button" type="submit">Sync now</button>
+      </form>
+    </div>
+  </header>
 
-<div class="grid-two">
-  <section class="section-card">
-    <p class="eyebrow">Last 30 days</p>
-    <h2>Daily revenue</h2>
-    <p class="section-note">Recent order value by creation date.</p>
-    <div class="chart-bars compact">
-      <% @daily_points.last(15).each do |point| %>
-        <% height = ((point["revenue"] / @max_daily_revenue.to_f) * 100).round %>
-        <div class="chart-column">
-          <div class="chart-value"><%= format_money(point["revenue"], "USD") %></div>
-          <div class="chart-bar" style="height:<%= [height, 6].max %>%"></div>
-          <div class="chart-caption"><%= point["date"][5..9] %></div>
-        </div>
+  <% unless @attention_items.empty? %>
+    <div class="attn-head">
+      <h2>Needs attention</h2>
+      <% action_count = @attention_items.count { |item| item["tone"] != "ok" } %>
+      <% if action_count.positive? %><span class="attn-count"><%= action_count %></span><% end %>
+    </div>
+    <div class="attn-strip">
+      <% @attention_items.each do |item| %>
+        <article class="section-card attn-tile">
+          <span class="attn-ico is-<%= item["tone"] %>"><%= attention_icon(item["icon"]) %></span>
+          <div class="attn-body">
+            <strong><%= h(item["title"]) %></strong>
+            <small><%= h(item["note"]) %></small>
+          </div>
+          <% if item["pill"] %>
+            <span class="pill is-<%= item["tone"] %>"><span class="pill-dot"></span><%= h(item["pill"]) %></span>
+          <% elsif item["method"] == "post" %>
+            <form method="post" action="<%= h(item["href"]) %>"><button class="button-ghost" type="submit"><%= h(item["action"]) %></button></form>
+          <% elsif item["action"] %>
+            <a class="button-ghost" href="<%= h(item["href"]) %>"><%= h(item["action"]) %></a>
+          <% end %>
+        </article>
       <% end %>
     </div>
-  </section>
+  <% end %>
 
-  <section class="section-card">
-    <p class="eyebrow">Financial status</p>
-    <h2>Order mix</h2>
-    <p class="section-note">Current payment state across imported orders.</p>
-    <% max_count = [@status_points.map { |item| item["count"] }.max.to_i, 1].max %>
-    <div class="status-list">
-      <% @status_points.each do |item| %>
-        <% width = ((item["count"].to_f / max_count) * 100).round %>
-        <div class="status-row">
-          <span><%= h(item["status"]) %></span>
-          <div class="meter"><span style="width:<%= width %>%"></span></div>
-          <strong><%= item["count"] %></strong>
+  <div class="home-grid">
+    <div class="home-main">
+      <div class="grid-four">
+        <article class="metric-card">
+          <p class="label">Total orders</p>
+          <% unless @orders_delta.nil? %>
+            <span class="metric-delta <%= @orders_delta >= 0 ? "up" : "down" %>"><%= @orders_delta >= 0 ? "▲" : "▼" %> <%= @orders_delta.abs %>%</span>
+          <% end %>
+          <p class="value"><%= @stats["total_orders"] %></p>
+          <p class="metric-foot"><%= @orders_last_30 %> new in 30 days</p>
+        </article>
+        <article class="metric-card">
+          <p class="label">Total revenue</p>
+          <% unless @revenue_delta.nil? %>
+            <span class="metric-delta <%= @revenue_delta >= 0 ? "up" : "down" %>"><%= @revenue_delta >= 0 ? "▲" : "▼" %> <%= @revenue_delta.abs %>%</span>
+          <% end %>
+          <p class="value"><%= format_money(@stats["total_revenue"], "USD") %></p>
+          <p class="metric-foot"><%= format_money(@recent_revenue, "USD") %> in 30 days</p>
+        </article>
+        <article class="metric-card">
+          <p class="label">Paid orders</p>
+          <p class="value"><%= @stats["paid_orders"] %></p>
+          <p class="metric-foot"><%= percentage(@stats["paid_orders"], @stats["total_orders"]) %>% of orders</p>
+        </article>
+        <article class="metric-card">
+          <p class="label">Fulfilled</p>
+          <p class="value"><%= @stats["fulfilled"] %></p>
+          <p class="metric-foot"><%= percentage(@stats["fulfilled"], @stats["total_orders"]) %>% of orders</p>
+        </article>
+      </div>
+
+      <section class="section-card">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">Last 30 days</p>
+            <h2>Daily revenue</h2>
+          </div>
+          <% unless @revenue_delta.nil? %>
+            <span class="delta <%= @revenue_delta >= 0 ? "up" : "down" %>">
+              <%= @revenue_delta >= 0 ? "▲" : "▼" %> <%= @revenue_delta.abs %>%
+            </span>
+          <% end %>
         </div>
-      <% end %>
+        <div class="area-chart" data-chart-w="<%= chart_w.to_i %>" data-chart-h="<%= chart_h.to_i %>">
+          <svg viewBox="0 0 <%= chart_w.to_i %> <%= chart_h.to_i %>" preserveAspectRatio="none" role="img" aria-label="Daily revenue over the last 30 days">
+            <defs>
+              <linearGradient id="revfill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="var(--accent)" stop-opacity="0.16"/>
+                <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path d="<%= curve %> L <%= chart_w.to_i %>,<%= chart_h.to_i %> L 0,<%= chart_h.to_i %> Z" fill="url(#revfill)"/>
+            <path d="<%= curve %>" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+            <line class="spark-guide" y1="0" y2="<%= chart_h.to_i %>"></line>
+            <circle class="spark-dot" r="4"></circle>
+            <g class="spark-hits">
+              <% points.each_with_index do |point, index| %>
+                <% x, y = coords[index] %>
+                <% label = Time.parse(point["date"]).strftime("%b %-d").upcase %>
+                <rect class="spark-hit" x="<%= (x - (chart_w / count / 2.0)).round(1) %>" y="0"
+                      width="<%= (chart_w / count).round(1) %>" height="<%= chart_h.to_i %>"
+                      data-x="<%= x %>" data-y="<%= y %>"
+                      data-date="<%= h(label) %>"
+                      data-rev="<%= h(format_money(point["revenue"], "USD")) %>"
+                      data-orders="<%= point["orders"] %>"></rect>
+              <% end %>
+            </g>
+          </svg>
+          <div class="chart-tip" aria-hidden="true">
+            <span class="tip-date"></span>
+            <span class="tip-val"></span>
+            <span class="tip-orders"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-card">
+        <h3 class="section-head">Financial status</h3>
+        <% max_count = [@status_points.map { |item| item["count"] }.max.to_i, 1].max %>
+        <div class="status-list">
+          <% @status_points.each do |item| %>
+            <% width = ((item["count"].to_f / max_count) * 100).round %>
+            <div class="status-row">
+              <span><%= h(item["status"]) %></span>
+              <div class="meter"><span style="width:<%= width %>%"></span></div>
+              <strong><%= item["count"] %></strong>
+            </div>
+          <% end %>
+        </div>
+      </section>
     </div>
-  </section>
+
+    <aside class="home-rail">
+      <article class="section-card rail-card">
+        <div class="store-badge">
+          <span class="store-mark"><%= h((@shop["shop_name"] || @shop["shop_domain"]).to_s[0, 2].upcase) %></span>
+          <div>
+            <strong><%= h(@shop["shop_name"] || @shop["shop_domain"]) %></strong>
+            <small><%= h(@plan_label) %></small>
+          </div>
+        </div>
+        <div class="usage">
+          <div class="usage-head">
+            <span>Invoices this month</span>
+            <% if @invoice_limit.nil? %>
+              <span><%= @invoice_usage %> · Unlimited</span>
+            <% else %>
+              <span><%= @invoice_usage %> / <%= @invoice_limit %></span>
+            <% end %>
+          </div>
+          <% if @invoice_limit && @invoice_limit.positive? %>
+            <div class="meterbar"><span style="width:<%= [percentage(@invoice_usage, @invoice_limit), 100].min %>%"></span></div>
+          <% end %>
+        </div>
+      </article>
+
+      <% if @top_vendors.any? %>
+        <article class="section-card rail-card">
+          <h3>Top vendors · net payable</h3>
+          <div class="rail-list">
+            <% @top_vendors.each do |vendor| %>
+              <div class="rail-row">
+                <span class="rail-name"><%= h(vendor["name"]) %></span>
+                <strong><%= format_money(vendor["net_payable"], "USD") %></strong>
+              </div>
+            <% end %>
+          </div>
+          <a class="rail-more" href="/vendors">All vendors →</a>
+        </article>
+      <% end %>
+
+      <article class="section-card rail-card">
+        <h3>Quick actions</h3>
+        <div class="rail-quick">
+          <a class="button-ghost" href="/orders">Browse orders</a>
+          <a class="button-ghost" href="/vendors">Vendor payouts</a>
+          <a class="button-ghost" href="/invoice-templates">Invoice templates</a>
+        </div>
+      </article>
+    </aside>
+  </div>
 </div>
+
+<script>
+  (function () {
+    var chart = document.querySelector(".dashboard .area-chart");
+    if (!chart) return;
+    var svg = chart.querySelector("svg");
+    var guide = chart.querySelector(".spark-guide");
+    var dot = chart.querySelector(".spark-dot");
+    var tip = chart.querySelector(".chart-tip");
+    var tipDate = tip.querySelector(".tip-date");
+    var tipVal = tip.querySelector(".tip-val");
+    var tipOrders = tip.querySelector(".tip-orders");
+    var vbW = parseFloat(chart.getAttribute("data-chart-w"));
+    var vbH = parseFloat(chart.getAttribute("data-chart-h"));
+
+    function show(rect) {
+      var x = parseFloat(rect.getAttribute("data-x"));
+      var y = parseFloat(rect.getAttribute("data-y"));
+      var orders = parseInt(rect.getAttribute("data-orders"), 10) || 0;
+      guide.setAttribute("x1", x); guide.setAttribute("x2", x);
+      dot.setAttribute("cx", x); dot.setAttribute("cy", y);
+      chart.classList.add("is-active");
+      tipDate.textContent = rect.getAttribute("data-date");
+      tipVal.textContent = rect.getAttribute("data-rev");
+      tipOrders.textContent = orders + (orders === 1 ? " order" : " orders");
+      var box = svg.getBoundingClientRect();
+      tip.style.left = (x / vbW) * box.width + "px";
+      tip.style.top = (y / vbH) * box.height + "px";
+    }
+
+    function hide() { chart.classList.remove("is-active"); }
+
+    chart.querySelectorAll(".spark-hit").forEach(function (rect) {
+      rect.addEventListener("mouseenter", function () { show(rect); });
+      rect.addEventListener("mousemove", function () { show(rect); });
+    });
+    chart.addEventListener("mouseleave", hide);
+  })();
+</script>

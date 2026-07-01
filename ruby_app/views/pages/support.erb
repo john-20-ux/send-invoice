@@ -1,64 +1,76 @@
-<div class="grid-three">
-  <section class="section-card">
-    <p class="eyebrow">Docs</p>
-    <h2>Guides</h2>
-    <p class="section-note">Setup, sync, and invoice workflow references.</p>
-  </section>
-  <section class="section-card">
-    <p class="eyebrow">Live chat</p>
-    <h2>Team access</h2>
-    <p class="section-note">Escalate sync or payout issues for review.</p>
-  </section>
-  <section class="section-card">
-    <p class="eyebrow">Email</p>
-    <h2>support@example.com</h2>
-    <p class="section-note">We respond within one business day.</p>
+<div class="support-page">
+  <div class="support-head">
+    <h1>Support</h1>
+    <p>Get help, browse answers, or send us a message.</p>
+  </div>
+
+  <div class="support-layout">
+    <section class="support-card support-form">
+      <div class="support-card-head">
+        <h2>Send a message</h2>
+        <p>We respond within one business day.</p>
+      </div>
+      <form method="post" action="/support">
+        <div class="grid-two">
+          <div class="field">
+            <label for="support_name">Name</label>
+            <input id="support_name" name="name" type="text" required>
+          </div>
+          <div class="field">
+            <label for="support_email">Email</label>
+            <input id="support_email" name="email" type="email" required>
+          </div>
+        </div>
+        <div class="field" style="margin-top:14px">
+          <label for="support_message">How can we help?</label>
+          <textarea id="support_message" name="message" rows="6" required></textarea>
+        </div>
+        <div class="support-actions">
+          <button class="button-primary" type="submit">Send message</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="support-rail">
+      <section class="support-card">
+        <h3>Ways to reach us</h3>
+        <p class="support-sub">Pick the channel that fits.</p>
+        <div class="support-reach">
+          <div class="support-chan">
+            <span class="support-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"></path><path d="M9 9h6M9 13h6M9 17h4"></path></svg></span>
+            <div><strong>Guides</strong><span>Setup, sync &amp; invoice docs</span></div>
+          </div>
+          <div class="support-chan">
+            <span class="support-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.5 7.2L3 21l1.8-6.5A8 8 0 1 1 21 12Z"></path></svg></span>
+            <div><strong>Live chat</strong><span>Escalate sync or payout issues</span></div>
+          </div>
+          <a class="support-chan" href="mailto:support@example.com">
+            <span class="support-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></span>
+            <div><strong>support@example.com</strong><span>Email us directly</span></div>
+          </a>
+        </div>
+      </section>
+
+      <section class="support-card">
+        <h3>Trust center</h3>
+        <p class="support-sub">For app review &amp; onboarding.</p>
+        <div class="button-inline" style="margin-top:14px">
+          <a class="button-ghost" href="/legal/privacy" target="_blank" rel="noreferrer">Privacy</a>
+          <a class="button-ghost" href="/legal/terms" target="_blank" rel="noreferrer">Terms</a>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <section class="support-card support-faq">
+    <h3>Frequently asked questions</h3>
+    <div class="faq">
+      <% @faq.each do |item| %>
+        <details>
+          <summary><%= h(item["question"]) %></summary>
+          <p><%= h(item["answer"]) %></p>
+        </details>
+      <% end %>
+    </div>
   </section>
 </div>
-
-<section class="section-card">
-  <p class="eyebrow">Trust center</p>
-  <h2>Public policies</h2>
-  <p class="section-note">Use these pages in Shopify review, merchant onboarding, and security questionnaires.</p>
-  <div class="button-inline" style="margin-top:18px">
-    <a class="button-secondary" href="/legal/privacy" target="_blank" rel="noreferrer">Privacy policy</a>
-    <a class="button-secondary" href="/legal/terms" target="_blank" rel="noreferrer">Terms of service</a>
-  </div>
-</section>
-
-<section class="section-card stack">
-  <div>
-    <p class="eyebrow">FAQ</p>
-    <h2>Frequently asked questions</h2>
-  </div>
-  <% @faq.each do |item| %>
-    <details class="faq-item">
-      <summary><%= h(item["question"]) %></summary>
-      <p><%= h(item["answer"]) %></p>
-    </details>
-  <% end %>
-</section>
-
-<section class="section-card">
-  <p class="eyebrow">Contact us</p>
-  <h2>Send a message</h2>
-  <form method="post" action="/support" class="stack" style="margin-top:18px">
-    <div class="grid-two">
-      <div class="field">
-        <label for="support_name">Name</label>
-        <input id="support_name" name="name" type="text" required>
-      </div>
-      <div class="field">
-        <label for="support_email">Email</label>
-        <input id="support_email" name="email" type="email" required>
-      </div>
-    </div>
-    <div class="field">
-      <label for="support_message">How can we help?</label>
-      <textarea id="support_message" name="message" required></textarea>
-    </div>
-    <div class="button-inline">
-      <button class="button" type="submit">Send message</button>
-    </div>
-  </form>
-</section>

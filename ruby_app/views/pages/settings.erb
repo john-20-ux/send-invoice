@@ -1,71 +1,80 @@
-<section class="section-card">
-  <h2>Invoice defaults</h2>
-  <p class="section-note">Default tax, currency, and invoice typography.</p>
+<%
+  smtp = @invoice_delivery_mode == "smtp"
+  channels = %w[email whatsapp slack basecamp]
+  active_channels = channels.count { |key| @notification_config.is_a?(Hash) && @notification_config[key].is_a?(Hash) && @notification_config[key]["enabled"] }
+  store_name = @shop["shop_name"] || @shop["shop_domain"]
+  store_mark = store_name.to_s[0, 2].upcase
+%>
 
-  <form method="post" action="/settings" class="grid-three" style="margin-top:20px">
-    <div class="field">
-      <label for="tax_rate">Tax rate (%)</label>
-      <input id="tax_rate" name="tax_rate" type="number" step="0.5" min="0" max="100" value="<%= @shop["tax_rate"] %>">
-    </div>
-    <div class="field">
-      <label for="currency">Default currency</label>
-      <select id="currency" name="currency">
-        <% ["USD ($)", "EUR (EUR)", "GBP (GBP)", "INR (INR)"].each do |currency| %>
-          <option value="<%= currency %>" <%= @shop["currency"] == currency ? "selected" : "" %>><%= currency %></option>
-        <% end %>
-      </select>
-    </div>
-    <div class="field">
-      <label for="font_name">Font style</label>
-      <select id="font_name" name="font_name">
-        <% ["Avenir Next", "Georgia", "Palatino", "Courier New"].each do |font| %>
-          <option value="<%= font %>" <%= @shop["font_name"] == font ? "selected" : "" %>><%= font %></option>
-        <% end %>
-      </select>
-    </div>
-    <div class="button-inline">
-      <button class="button" type="submit">Save settings</button>
-    </div>
-  </form>
-</section>
+<div class="settings-page">
+  <div class="settings-head">
+    <h1>Settings</h1>
+  </div>
 
-<div class="grid-two">
-  <section class="section-card">
-    <h2>Invoice sending</h2>
-    <p class="section-note">
-      <% if @invoice_delivery_mode == "smtp" %>
-        SMTP delivery is active for order invoice sends.
-      <% else %>
-        Order invoice sends currently use the local outbox fallback until SMTP is configured.
-      <% end %>
-    </p>
-    <div class="button-inline" style="margin-top:18px">
-      <a class="button-secondary" href="/notifications">Manage email template</a>
+  <div class="settings-content">
+    <div class="settings-store">
+      <span class="settings-mark"><%= h(store_mark) %></span>
+      <div class="settings-store-who">
+        <strong><%= h(store_name) %></strong>
+        <span><%= h(@shop["shop_domain"]) %> · <%= h(@plan_label) %></span>
+      </div>
     </div>
-  </section>
 
-  <section class="section-card">
-    <h2>Notifications</h2>
-    <p class="section-note">Configure email, WhatsApp, Slack, and Basecamp delivery rules.</p>
-    <div class="button-inline" style="margin-top:18px">
-      <a class="button-secondary" href="/notifications">Manage notifications</a>
-    </div>
-  </section>
+    <section id="delivery" class="settings-section">
+      <h2>Delivery</h2>
+      <p class="settings-sub">How order invoices are generated and sent to customers.</p>
+      <div class="settings-panel">
+        <span class="settings-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></span>
+        <div class="settings-panel-text">
+          <strong>Invoice sending</strong>
+          <p><% if smtp %>Direct SMTP delivery is active for order invoice sends.<% else %>Local outbox fallback until SMTP is configured.<% end %></p>
+        </div>
+        <span class="badge <%= smtp ? "badge-success" : "badge-warn" %>"><%= smtp ? "SMTP" : "Outbox" %></span>
+        <a class="button" href="/notifications/email">Manage email template</a>
+      </div>
+    </section>
 
-  <section class="section-card">
-    <h2>Plan and trial</h2>
-    <p class="section-note">You are currently on the <strong><%= h(@shop["current_plan"].capitalize) %></strong> plan.</p>
-    <div class="button-inline" style="margin-top:18px">
-      <a class="button-secondary" href="/settings/plans">View plans</a>
-    </div>
-  </section>
+    <section id="notifications" class="settings-section">
+      <h2>Notifications</h2>
+      <p class="settings-sub">Channels used to deliver invoices and alerts.</p>
+      <div class="settings-panel">
+        <span class="settings-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9a6 6 0 0112 0c0 5 2 7 2 7H4s2-2 2-7"></path><path d="M10 20a2 2 0 004 0"></path></svg></span>
+        <div class="settings-panel-text">
+          <strong>Delivery channels</strong>
+          <p>Email, WhatsApp, Slack, and Basecamp delivery rules.</p>
+        </div>
+        <span class="badge <%= active_channels.positive? ? "badge-success" : "badge-muted" %>"><%= active_channels %> of 4 active</span>
+        <a class="button" href="/notifications">Manage notifications</a>
+      </div>
+    </section>
 
-  <section class="section-card">
-    <h2>Policies</h2>
-    <p class="section-note">Use these public pages for app review, merchant trust, and support references.</p>
-    <div class="button-inline" style="margin-top:18px">
-      <a class="button-secondary" href="/legal/privacy" target="_blank" rel="noreferrer">Privacy policy</a>
-      <a class="button-secondary" href="/legal/terms" target="_blank" rel="noreferrer">Terms of service</a>
-    </div>
-  </section>
+    <section id="billing" class="settings-section">
+      <h2>Billing</h2>
+      <p class="settings-sub">Your subscription plan and trial status.</p>
+      <div class="settings-panel">
+        <span class="settings-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path></svg></span>
+        <div class="settings-panel-text">
+          <strong>Plan &amp; trial</strong>
+          <p>You are currently on the <%= h(@plan_label) %> plan.</p>
+        </div>
+        <a class="button" href="/settings/plans">View plans</a>
+      </div>
+    </section>
+
+    <section id="legal" class="settings-section">
+      <h2>Legal</h2>
+      <p class="settings-sub">Public pages for app review and merchant trust.</p>
+      <div class="settings-panel">
+        <span class="settings-ico is-gray"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 7.5 8 9 4.5-1.5 8-4 8-9V6z"></path></svg></span>
+        <div class="settings-panel-text">
+          <strong>Policies</strong>
+          <p>Privacy policy &amp; terms of service.</p>
+        </div>
+        <div class="button-inline">
+          <a class="button-ghost" href="/legal/privacy" target="_blank" rel="noreferrer">Privacy</a>
+          <a class="button-ghost" href="/legal/terms" target="_blank" rel="noreferrer">Terms</a>
+        </div>
+      </div>
+    </section>
+  </div>
 </div>

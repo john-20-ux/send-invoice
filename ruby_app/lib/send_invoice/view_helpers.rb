@@ -118,6 +118,42 @@ module SendInvoice
         %(stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">#{inner}</svg>)
     end
 
+    # Smooth SVG path ("d" attribute) through the given [x, y] coordinates using
+    # a Catmull-Rom spline converted to cubic Béziers. Control points are clamped
+    # to the [0, max_y] band so spiky data can't overshoot outside the chart.
+    def smooth_path(coords, max_y)
+      return "" if coords.empty?
+      return "M #{coords[0][0]} #{coords[0][1]}" if coords.length < 2
+
+      clamp = ->(value) { [[value, 0.0].max, max_y].min.round(2) }
+      d = +"M #{coords[0][0]} #{coords[0][1]}"
+      (0...(coords.length - 1)).each do |i|
+        p0 = coords[i - 1] || coords[i]
+        p1 = coords[i]
+        p2 = coords[i + 1]
+        p3 = coords[i + 2] || p2
+        c1x = (p1[0] + (p2[0] - p0[0]) / 6.0).round(2)
+        c1y = clamp.call(p1[1] + (p2[1] - p0[1]) / 6.0)
+        c2x = (p2[0] - (p3[0] - p1[0]) / 6.0).round(2)
+        c2y = clamp.call(p2[1] - (p3[1] - p1[1]) / 6.0)
+        d << " C #{c1x} #{c1y} #{c2x} #{c2y} #{p2[0]} #{p2[1]}"
+      end
+      d
+    end
+
+    # Line icon for a "Needs attention" tile, keyed by signal type.
+    def attention_icon(key)
+      paths = {
+        "payment" => '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+        "fulfill" => '<path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/>',
+        "invoice" => '<path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
+        "sync" => '<path d="M4 12a8 8 0 0114-5.3L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 01-14 5.3L4 16"/><path d="M4 20v-4h4"/>'
+      }
+      inner = paths[key] || paths["sync"]
+      %(<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" ) +
+        %(stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">#{inner}</svg>)
+    end
+
     def flash_class(type)
       case type.to_s
       when "error"

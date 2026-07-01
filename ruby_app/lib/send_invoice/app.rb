@@ -28,7 +28,7 @@ module SendInvoice
       { "label" => "Orders", "path" => "/orders", "key" => "orders" },
       { "label" => "Vendors", "path" => "/vendors", "key" => "vendors" },
       { "label" => "Invoice Templates", "path" => "/invoice-templates", "key" => "invoice_templates" },
-      { "label" => "Notifications", "path" => "/notifications", "key" => "notifications" },
+      # Notifications now lives inside Settings (surfaced via cards on the settings page).
       { "label" => "Settings", "path" => "/settings", "key" => "settings" },
       { "label" => "Support", "path" => "/support", "key" => "support" }
     ].freeze
@@ -257,10 +257,12 @@ module SendInvoice
         render_notifications
       when ["POST", "/notifications"]
         handle_notification_save
+      when ["GET", "/notifications/email"]
+        render_email_template
+      when ["POST", "/notifications/email"]
+        handle_email_template_save
       when ["GET", "/settings"]
         render_settings
-      when ["POST", "/settings"]
-        handle_settings_save
       when ["GET", "/settings/plans"]
         render_plans
       when ["GET", "/settings/plans/callback"]
@@ -461,7 +463,11 @@ module SendInvoice
         "total_orders" => orders.length,
         "total_revenue" => total_revenue,
         "paid_orders" => orders.count { |order| order["fully_paid"] },
-        "fulfilled" => orders.count { |order| order["fulfillment_status"] == "FULFILLED" }
+        "fulfilled" => orders.count { |order| order["fulfillment_status"] == "FULFILLED" },
+        # Exactly-filterable buckets so the attention tiles can deep-link into a
+        # matching /orders view (financial_status / fulfillment_status filters).
+        "pending_orders" => orders.count { |order| order["financial_status"] == "PENDING" },
+        "unfulfilled_orders" => orders.count { |order| order["fulfillment_status"].to_s.empty? || order["fulfillment_status"] == "UNFULFILLED" }
       }
 
       daily_points = last_30_day_revenue(orders)
@@ -469,16 +475,122 @@ module SendInvoice
         { "status" => status, "count" => records.length }
       end.sort_by { |item| -item["count"] }
 
+      sync_status = @sync_engine.status(shop["shop_domain"])
+
+      # Period comparison: revenue and order volume over the last 30 days vs the
+      # 30 days before that, so the header chip reflects a real trend.
+      now = Time.now
+      recent_revenue = revenue_between(orders, now - (30 * 86_400), now)
+      prior_revenue = revenue_between(orders, now - (60 * 86_400), now - (30 * 86_400))
+      orders_last_30 = orders_between(orders, now - (30 * 86_400), now)
+      orders_prior_30 = orders_between(orders, now - (60 * 86_400), now - (30 * 86_400))
+
       render_page("pages/dashboard", {
         page_title: "Dashboard",
         current_path: @request.path,
         shop: shop,
-        sync_status: @sync_engine.status(shop["shop_domain"]),
+        sync_status: sync_status,
         stats: stats,
         daily_points: daily_points,
         status_points: status_points,
-        max_daily_revenue: [daily_points.map { |point| point["revenue"] }.max.to_f, 1].max
+        max_daily_revenue: [daily_points.map { |point| point["revenue"] }.max.to_f, 1].max,
+        recent_revenue: recent_revenue,
+        revenue_delta: percent_change(recent_revenue, prior_revenue),
+        orders_last_30: orders_last_30,
+        orders_delta: percent_change(orders_last_30, orders_prior_30),
+        attention_items: dashboard_attention_items(shop, stats, sync_status),
+        top_vendors: vendor_summaries(shop, orders).sort_by { |vendor| -vendor["net_payable"] }.first(4),
+        plan_label: dashboard_plan_label(shop),
+        invoice_usage: invoice_usage(shop),
+        invoice_limit: invoice_limit_for(shop)
       })
+    end
+
+    # Sum of order value created within the [from, to) window.
+    def revenue_between(orders, from, to)
+      orders.sum do |order|
+        created = Time.parse(order["created_at"])
+        (created >= from && created < to) ? order["total_price_amount"] : 0.0
+      end.round(2)
+    end
+
+    # Count of orders created within the [from, to) window.
+    def orders_between(orders, from, to)
+      orders.count do |order|
+        created = Time.parse(order["created_at"])
+        created >= from && created < to
+      end
+    end
+
+    # Signed percent change, or nil when there's no prior baseline to compare to.
+    def percent_change(current, previous)
+      return nil if previous.to_f <= 0
+
+      # to_f before dividing: integer order counts would otherwise floor-divide
+      # (e.g. (32 - 40) / 40 == -1 in Ruby, rendering a bogus -100%).
+      (((current - previous).to_f / previous) * 100).round(1)
+    end
+
+    def dashboard_plan_label(shop)
+      plan = effective_plan(shop)
+      return "Free trial" if plan == "trial"
+
+      BILLING_PLANS.dig(plan, "name") || "No plan"
+    end
+
+    # Real, actionable signals for the "Needs attention" strip, most urgent
+    # first. Always ends with the sync state so the strip is never empty.
+    def dashboard_attention_items(shop, stats, sync_status)
+      items = []
+
+      pending = stats["pending_orders"]
+      if pending.positive?
+        items << {
+          "tone" => "warn", "icon" => "payment",
+          "title" => "#{pending} #{pending == 1 ? 'order' : 'orders'} pending payment",
+          "note" => "Not yet paid", "action" => "Review", "href" => "/orders?financial_status=PENDING"
+        }
+      end
+
+      unfulfilled = stats["unfulfilled_orders"]
+      if unfulfilled.positive?
+        items << {
+          "tone" => "info", "icon" => "fulfill",
+          "title" => "#{unfulfilled} #{unfulfilled == 1 ? 'order' : 'orders'} to fulfill",
+          "note" => "Awaiting fulfillment", "action" => "View", "href" => "/orders?fulfillment_status=UNFULFILLED"
+        }
+      end
+
+      limit = invoice_limit_for(shop)
+      if limit && limit.positive? && invoice_usage(shop) >= (limit * 0.8)
+        items << {
+          "tone" => "warn", "icon" => "invoice",
+          "title" => "#{invoice_usage(shop)} of #{limit} invoices used",
+          "note" => "Upgrade for more this month", "action" => "Plans", "href" => "/settings/plans"
+        }
+      end
+
+      items << dashboard_sync_item(sync_status)
+      items.first(3)
+    end
+
+    def dashboard_sync_item(sync_status)
+      case sync_status["status"]
+      when "failed"
+        { "tone" => "warn", "icon" => "sync", "title" => "Sync failed",
+          "note" => "The latest sync did not complete", "action" => "Sync now", "href" => "/orders/sync", "method" => "post" }
+      when "running", "queued"
+        { "tone" => "info", "icon" => "sync", "title" => "Sync in progress",
+          "note" => "Fetching the latest orders from Shopify", "pill" => "Syncing" }
+      else
+        if sync_status["lastSyncedAt"]
+          { "tone" => "ok", "icon" => "sync", "title" => "All orders synced",
+            "note" => "Last synced #{time_ago(sync_status['lastSyncedAt'])}", "pill" => "OK" }
+        else
+          { "tone" => "info", "icon" => "sync", "title" => "Run your first sync",
+            "note" => "Import your Shopify orders", "action" => "Sync now", "href" => "/orders/sync", "method" => "post" }
+        end
+      end
     end
 
     def render_orders
@@ -917,7 +1029,8 @@ module SendInvoice
       shop = require_onboarded_shop
       render_page("pages/notifications", {
         page_title: "Notifications",
-        current_path: @request.path,
+        # Keep the Settings nav item active — Notifications is a settings sub-page.
+        current_path: "/settings",
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
         notification_config: merged_notification_config(shop),
@@ -953,6 +1066,35 @@ module SendInvoice
       redirect_to("/notifications")
     end
 
+    # Focused editor for just the invoice email template (subject/body + toggle),
+    # reached from Settings → Invoice sending. Other channels live on /notifications.
+    def render_email_template
+      shop = require_onboarded_shop
+      render_page("pages/email_template", {
+        page_title: "Email template",
+        current_path: "/settings",
+        shop: shop,
+        sync_status: @sync_engine.status(shop["shop_domain"]),
+        notification_config: merged_notification_config(shop),
+        invoice_delivery_mode: invoice_delivery_mode_label,
+        notification_placeholders: notification_placeholders
+      })
+    end
+
+    def handle_email_template_save
+      shop = require_onboarded_shop
+      # Merge only the email block so the other channels' settings are preserved.
+      config = merged_notification_config(shop)
+      config["email"] = {
+        "enabled" => single_value(params["email_enabled"]) == "1",
+        "subject" => single_value(params["email_subject"]).to_s,
+        "body" => single_value(params["email_body"]).to_s
+      }
+      @store.update_shop(shop["shop_domain"], "notification_config" => config)
+      flash!("info", "Email template updated.")
+      redirect_to("/notifications/email")
+    end
+
     def render_settings
       shop = require_onboarded_shop
       render_page("pages/settings", {
@@ -960,19 +1102,10 @@ module SendInvoice
         current_path: @request.path,
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
-        invoice_delivery_mode: invoice_delivery_mode_label
+        invoice_delivery_mode: invoice_delivery_mode_label,
+        notification_config: merged_notification_config(shop),
+        plan_label: dashboard_plan_label(shop)
       })
-    end
-
-    def handle_settings_save
-      shop = require_onboarded_shop
-      @store.update_shop(shop["shop_domain"], {
-        "tax_rate" => single_value(params["tax_rate"]).to_f,
-        "currency" => single_value(params["currency"]).to_s,
-        "font_name" => single_value(params["font_name"]).to_s
-      })
-      flash!("info", "Invoice settings updated.")
-      redirect_to("/settings")
     end
 
     def render_plans
@@ -1638,18 +1771,20 @@ module SendInvoice
 
     def last_30_day_revenue(orders)
       cutoff = Time.now - (29 * 86_400)
-      daily = Hash.new(0.0)
+      revenue = Hash.new(0.0)
+      counts = Hash.new(0)
       orders.each do |order|
         timestamp = Time.parse(order["created_at"])
         next if timestamp < cutoff
 
         key = timestamp.strftime("%Y-%m-%d")
-        daily[key] += order["total_price_amount"]
+        revenue[key] += order["total_price_amount"]
+        counts[key] += 1
       end
 
       (0..29).map do |offset|
         day = (Time.now - ((29 - offset) * 86_400)).strftime("%Y-%m-%d")
-        { "date" => day, "revenue" => daily.fetch(day, 0.0).round(2) }
+        { "date" => day, "revenue" => revenue.fetch(day, 0.0).round(2), "orders" => counts.fetch(day, 0) }
       end
     end
 

@@ -1,68 +1,113 @@
-<form method="post" action="/notifications" class="cards-grid">
-  <section class="section-card" style="grid-column:1 / -1">
-    <h2>Email delivery</h2>
-    <p class="section-note">
-      <% if @invoice_delivery_mode == "smtp" %>
-        SMTP is configured. Invoices sent from the order detail page go out directly by email.
-      <% else %>
-        SMTP is not configured yet. Invoices sent from the order detail page are saved to the local outbox for review.
-      <% end %>
-    </p>
-    <p class="muted" style="margin-top:10px">
-      Supported placeholders:
-      <% @notification_placeholders.each do |token| %>
-        <code>{{<%= token %>}}</code><%= token == @notification_placeholders.last ? "" : ", " %>
-      <% end %>
-    </p>
-  </section>
+<%
+  smtp = @invoice_delivery_mode == "smtp"
+  channels = {
+    "email" => {
+      "title" => "Email", "desc" => "Send invoices and updates by email.",
+      "icon" => '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>'
+    },
+    "whatsapp" => {
+      "title" => "WhatsApp", "desc" => "Send invoice messages through WhatsApp.",
+      "icon" => '<path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 21l2.1-5.3A8.5 8.5 0 1 1 21 11.5Z"></path>'
+    },
+    "slack" => {
+      "title" => "Slack", "desc" => "Post alerts to a Slack channel.",
+      "icon" => '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"></path>'
+    },
+    "basecamp" => {
+      "title" => "Basecamp", "desc" => "Add payout updates to a Basecamp project.",
+      "icon" => '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9h18M9 9v11"></path>'
+    }
+  }
+%>
 
-  <% {
-    "email" => { "title" => "Email", "description" => "Send invoices and updates by email." },
-    "whatsapp" => { "title" => "WhatsApp", "description" => "Send invoice messages through WhatsApp." },
-    "slack" => { "title" => "Slack", "description" => "Post alerts to a Slack channel." },
-    "basecamp" => { "title" => "Basecamp", "description" => "Add payout updates to a Basecamp project." }
-  }.each do |channel, meta| %>
-    <% config = @notification_config[channel] %>
-    <section class="channel-card">
-      <div class="checkbox-row">
-        <input id="<%= channel %>_enabled" name="<%= channel %>_enabled" type="checkbox" value="1" <%= config["enabled"] ? "checked" : "" %>>
-        <label for="<%= channel %>_enabled"><strong><%= meta["title"] %></strong></label>
+<form method="post" action="/notifications" class="notif-page">
+  <a class="back-link" href="/settings">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"></path></svg>
+    Settings
+  </a>
+  <div class="settings-head">
+    <p class="eyebrow">Settings</p>
+    <h1>Notifications</h1>
+  </div>
+
+  <div class="notif-content">
+    <div class="notif-status">
+      <span class="notif-status-ico">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>
+      </span>
+      <div>
+        <strong>Email delivery</strong>
+        <p><% if smtp %>SMTP is configured — invoices sent from the order detail page go out directly by email.<% else %>SMTP is not configured yet. Invoices sent from the order detail page are saved to the local outbox for review.<% end %></p>
+        <div class="ph-label">Supported placeholders</div>
+        <div class="ph-chips">
+          <% @notification_placeholders.each do |token| %><code class="ph-chip">{{<%= token %>}}</code><% end %>
+        </div>
       </div>
-      <p class="muted" style="margin-top:10px"><%= meta["description"] %></p>
+    </div>
 
-      <% if channel == "email" %>
-        <div class="field" style="margin-top:14px">
-          <label for="email_subject">Subject</label>
-          <input id="email_subject" name="email_subject" type="text" value="<%= h(config["subject"]) %>">
+    <% channels.each do |channel, meta| %>
+      <% config = @notification_config[channel] %>
+      <section class="notif-card">
+        <div class="notif-head">
+          <span class="notif-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><%= meta["icon"] %></svg></span>
+          <div class="notif-head-text">
+            <strong><%= meta["title"] %></strong>
+            <p><%= meta["desc"] %></p>
+          </div>
+          <label class="switch">
+            <input id="<%= channel %>_enabled" name="<%= channel %>_enabled" type="checkbox" value="1" <%= config["enabled"] ? "checked" : "" %> aria-label="Enable <%= meta["title"] %>">
+            <span class="switch-track"></span>
+          </label>
         </div>
-        <div class="field" style="margin-top:12px">
-          <label for="email_body">Body</label>
-          <textarea id="email_body" name="email_body"><%= h(config["body"]) %></textarea>
-        </div>
-      <% elsif channel == "whatsapp" %>
-        <div class="field" style="margin-top:14px">
-          <label for="whatsapp_phone">Phone</label>
-          <input id="whatsapp_phone" name="whatsapp_phone" type="text" value="<%= h(config["phone"]) %>">
-        </div>
-        <div class="field" style="margin-top:12px">
-          <label for="whatsapp_message">Message</label>
-          <textarea id="whatsapp_message" name="whatsapp_message"><%= h(config["message"]) %></textarea>
-        </div>
-      <% elsif channel == "slack" %>
-        <div class="field" style="margin-top:14px">
-          <label for="slack_channel">Channel</label>
-          <input id="slack_channel" name="slack_channel" type="text" value="<%= h(config["channel"]) %>">
-        </div>
-      <% else %>
-        <div class="field" style="margin-top:14px">
-          <label for="basecamp_project">Project</label>
-          <input id="basecamp_project" name="basecamp_project" type="text" value="<%= h(config["project"]) %>">
-        </div>
-      <% end %>
-    </section>
-  <% end %>
 
-  <div class="button-inline">
-    <button class="button" type="submit">Save notification settings</button>
+        <div class="notif-fields">
+          <% if channel == "email" %>
+            <div class="field">
+              <label for="email_subject">Subject</label>
+              <input id="email_subject" name="email_subject" type="text" value="<%= h(config["subject"]) %>">
+            </div>
+            <div class="field">
+              <label for="email_body">Body</label>
+              <textarea id="email_body" name="email_body" rows="4"><%= h(config["body"]) %></textarea>
+            </div>
+          <% elsif channel == "whatsapp" %>
+            <div class="field">
+              <label for="whatsapp_phone">Phone</label>
+              <input id="whatsapp_phone" name="whatsapp_phone" type="text" value="<%= h(config["phone"]) %>" placeholder="+1 555 000 1234">
+            </div>
+            <div class="field">
+              <label for="whatsapp_message">Message</label>
+              <textarea id="whatsapp_message" name="whatsapp_message" rows="3"><%= h(config["message"]) %></textarea>
+            </div>
+          <% elsif channel == "slack" %>
+            <div class="field">
+              <label for="slack_channel">Channel</label>
+              <input id="slack_channel" name="slack_channel" type="text" value="<%= h(config["channel"]) %>" placeholder="#invoices">
+            </div>
+          <% else %>
+            <div class="field">
+              <label for="basecamp_project">Project</label>
+              <input id="basecamp_project" name="basecamp_project" type="text" value="<%= h(config["project"]) %>" placeholder="Payouts">
+            </div>
+          <% end %>
+        </div>
+      </section>
+    <% end %>
+
+    <div class="notif-actions">
+      <button class="button-primary" type="submit">Save changes</button>
+    </div>
   </div>
 </form>
+
+<script>
+  (function () {
+    document.querySelectorAll(".notif-card").forEach(function (card) {
+      var input = card.querySelector('input[type="checkbox"]');
+      if (!input) return;
+      var sync = function () { card.classList.toggle("is-collapsed", !input.checked); };
+      sync();
+      input.addEventListener("change", sync);
+    });
+  })();
+</script>

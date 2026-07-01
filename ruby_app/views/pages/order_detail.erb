@@ -1,301 +1,288 @@
-<% raw = @selected_order["raw_data"].is_a?(Hash) ? @selected_order["raw_data"] : {} %>
-<% subtotal = @selected_order["line_items"].sum { |line_item| line_item["totalAmount"].to_f } %>
-<% item_quantity = @selected_order["line_items"].sum { |line_item| line_item["quantity"].to_i } %>
-<% customer_name = [@selected_order["customer_first_name"], @selected_order["customer_last_name"]].compact.join(" ").strip %>
-<% shipping_lines = address_lines(raw["shippingAddress"] || {}) %>
-<% billing_lines = address_lines(raw["billingAddress"] || {}) %>
-<% customer_lines = address_lines(raw["customer"] || {}) %>
-<% tags = raw["tags"].is_a?(Array) ? raw["tags"].reject { |tag| tag.to_s.strip.empty? } : [] %>
-<% transaction_rows = if raw["transactions"].is_a?(Array) && !raw["transactions"].empty?
-    raw["transactions"]
-  else
-    Array(@selected_order["transactions"]).map do |transaction|
-      {
-        "kind" => "PAYMENT",
-        "status" => @selected_order["financial_status"],
-        "gateway" => "Synced transaction",
-        "processedAt" => @selected_order["updated_at"],
-        "amountSet" => {
-          "shopMoney" => {
-            "amount" => transaction["amount"],
-            "currencyCode" => transaction["currency"] || @selected_order["total_price_currency"]
+<%
+  raw = @selected_order["raw_data"].is_a?(Hash) ? @selected_order["raw_data"] : {}
+  currency = @selected_order["total_price_currency"]
+  subtotal = @selected_order["line_items"].sum { |line_item| line_item["totalAmount"].to_f }
+  item_quantity = @selected_order["line_items"].sum { |line_item| line_item["quantity"].to_i }
+  customer_name = [@selected_order["customer_first_name"], @selected_order["customer_last_name"]].compact.join(" ").strip
+  customer_name = "Guest" if customer_name.empty?
+  shipping_lines = address_lines(raw["shippingAddress"] || {})
+  billing_lines = address_lines(raw["billingAddress"] || {})
+  customer_lines = address_lines(raw["customer"] || {})
+  billed_lines = billing_lines.any? ? billing_lines : shipping_lines
+  tags = raw["tags"].is_a?(Array) ? raw["tags"].reject { |tag| tag.to_s.strip.empty? } : []
+  discounts = @selected_order["total_discounts_amount"].to_f
+  refunded = @selected_order["total_refunded_amount"].to_f
+  paid = @selected_order["fully_paid"] || @selected_order["financial_status"] == "PAID"
+  invoice_number = (@selected_order_invoice_document.is_a?(Hash) ? @selected_order_invoice_document["invoice_number"] : nil).to_s
+  invoice_number = @selected_order["name"] if invoice_number.strip.empty?
+
+  transaction_rows = if raw["transactions"].is_a?(Array) && !raw["transactions"].empty?
+      raw["transactions"]
+    else
+      Array(@selected_order["transactions"]).map do |transaction|
+        {
+          "kind" => "PAYMENT",
+          "status" => @selected_order["financial_status"],
+          "gateway" => "Synced transaction",
+          "processedAt" => @selected_order["updated_at"],
+          "amountSet" => {
+            "shopMoney" => {
+              "amount" => transaction["amount"],
+              "currencyCode" => transaction["currency"] || currency
+            }
           }
         }
-      }
+      end
     end
-  end %>
+  gateway = transaction_rows.first ? transaction_rows.first["gateway"] : nil
+  paid_stamp = paid ? "Paid in full#{gateway ? " via #{gateway}" : ""}" : "#{humanize_status(@selected_order["financial_status"])} payment"
+%>
 
-<section class="detail-panel order-detail-shell">
-  <div class="toolbar">
+<section class="order-detail-a">
+  <a class="back-link" href="<%= h(@order_back_path) %>">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"></path></svg>
+    Back to orders
+  </a>
+
+  <header class="odt-head">
     <div>
-      <a class="back-link" href="<%= h(@order_back_path) %>">
-        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M10 3 5 8l5 5"></path>
-        </svg>
-        Back to orders
-      </a>
       <p class="eyebrow">Shopify order</p>
-      <h2><%= h(@selected_order["name"]) %></h2>
-      <p class="section-note"><%= h(@selected_order["id"]) %></p>
+      <h1 class="odt-title">
+        <%= h(@selected_order["name"]) %>
+        <span class="<%= badge_class(@selected_order["financial_status"]) %>"><%= h(@selected_order["financial_status"]) %></span>
+        <span class="<%= badge_class(@selected_order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(@selected_order["fulfillment_status"] || "UNFULFILLED") %></span>
+      </h1>
+      <p class="odt-sub"><%= h(customer_name) %> · Placed <%= format_datetime(@selected_order["created_at"]) %></p>
     </div>
     <div class="button-inline">
       <a class="button-ghost" href="<%= order_invoice_path(@selected_order["id"], @shop["shop_domain"]) %>" target="_blank" rel="noreferrer">Preview invoice</a>
       <a class="button-ghost" href="<%= order_invoice_pdf_path(@selected_order["id"], @shop["shop_domain"]) %>">Download PDF</a>
-      <span class="<%= badge_class(@selected_order["financial_status"]) %>"><%= h(@selected_order["financial_status"]) %></span>
-      <span class="<%= badge_class(@selected_order["fulfillment_status"] || "UNFULFILLED") %>"><%= h(@selected_order["fulfillment_status"] || "UNFULFILLED") %></span>
     </div>
-  </div>
+  </header>
 
-  <div class="grid-four order-summary-grid">
-    <article class="metric-card">
-      <p class="label">Customer</p>
-      <p class="value"><%= h(customer_name.empty? ? "Guest" : customer_name) %></p>
-    </article>
-    <article class="metric-card">
-      <p class="label">Items</p>
-      <p class="value"><%= item_quantity %></p>
-    </article>
-    <article class="metric-card">
-      <p class="label">Order total</p>
-      <p class="value"><%= format_money(@selected_order["total_price_amount"], @selected_order["total_price_currency"]) %></p>
-    </article>
-    <article class="metric-card">
-      <p class="label">Last synced</p>
-      <p class="value"><%= time_ago(@selected_order["synced_at"]) %></p>
-    </article>
-  </div>
-
-  <div class="order-workspace">
-    <div class="order-main-column">
-      <section class="section-card">
-        <div class="toolbar">
-          <div>
-            <p class="eyebrow">Invoice delivery</p>
-            <h3>Send invoice</h3>
-            <p class="section-note">
-              <% if !@can_email_invoice %>
-                Email delivery isn't included on the Free plan. Use <strong>Download PDF</strong> above, or upgrade to email invoices.
-              <% elsif @invoice_delivery_mode == "smtp" %>
-                Direct email delivery is enabled through SMTP.
-              <% else %>
-                Direct SMTP is not configured yet. Sent invoices are saved to the local outbox.
-              <% end %>
-            </p>
-          </div>
-        </div>
-
-        <% unless @can_email_invoice %>
-          <div class="button-inline" style="margin-top:20px">
-            <a class="button" href="<%= order_invoice_pdf_path(@selected_order["id"], @shop["shop_domain"]) %>">Download PDF</a>
-            <a class="button-ghost" href="/settings/plans">Upgrade to email</a>
-          </div>
-        <% end %>
-
-        <% if @can_email_invoice %>
-        <form method="post" action="<%= order_send_invoice_path(@selected_order["id"], @shop["shop_domain"]) %>" class="stack" style="margin-top:20px">
-          <div class="grid-two">
-            <div class="field">
-              <label for="recipient_email">Recipient email</label>
-              <input id="recipient_email" name="recipient_email" type="email" value="<%= h(@selected_order_invoice_draft["recipient_email"]) %>" required>
-            </div>
-            <div class="field">
-              <label>Invoice file</label>
-              <input type="text" value="<%= h(@selected_order_invoice_filename) %>" disabled>
-            </div>
-          </div>
-          <div class="field">
-            <label for="email_subject">Subject</label>
-            <input id="email_subject" name="email_subject" type="text" value="<%= h(@selected_order_invoice_draft["subject"]) %>">
-          </div>
-          <div class="field">
-            <label for="email_body">Message</label>
-            <textarea id="email_body" name="email_body" rows="8"><%= h(@selected_order_invoice_draft["body_text"]) %></textarea>
-          </div>
-          <div class="button-inline">
-            <button class="button" type="submit">Send invoice</button>
-          </div>
-        </form>
-        <% end %>
-      </section>
-
-      <section class="table-shell">
-        <div class="toolbar">
-          <div>
-            <p class="eyebrow">Line items</p>
-            <h3>Items in this order</h3>
-          </div>
-        </div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>SKU</th>
-              <th>Vendor</th>
-              <th class="align-right">Qty</th>
-              <th class="align-right">Current Qty</th>
-              <th class="align-right">Line total</th>
-            </tr>
-          </thead>
-          <tbody>
-            <% @selected_order["line_items"].each do |line_item| %>
-              <tr>
-                <td>
-                  <strong><%= h(line_item["title"]) %></strong>
-                  <div class="table-subcopy"><%= h(line_item["variantTitle"] || "Default variant") %></div>
-                </td>
-                <td><%= h(line_item["sku"] || "-") %></td>
-                <td><%= h(line_item["vendor"] || "-") %></td>
-                <td class="align-right"><%= line_item["quantity"] %></td>
-                <td class="align-right"><%= line_item["currentQuantity"] %></td>
-                <td class="align-right"><%= format_money(line_item["totalAmount"], line_item["totalCurrency"]) %></td>
-              </tr>
+  <div class="odt-layout">
+    <div class="odt-main">
+      <article class="odt-doc">
+        <div class="odt-doc-head">
+          <div class="odt-billed">
+            <small>Billed to</small>
+            <strong><%= h(customer_name) %></strong>
+            <% billed_body = billed_lines.reject { |line| line == customer_name } %>
+            <% if billed_body.any? %>
+              <div class="odt-addr">
+                <% billed_body.each do |line| %><p><%= h(line) %></p><% end %>
+              </div>
             <% end %>
-          </tbody>
-        </table>
-      </section>
-
-      <section class="table-shell">
-        <div class="toolbar">
-          <div>
-            <p class="eyebrow">Payments</p>
-            <h3>Transactions</h3>
+          </div>
+          <div class="odt-invmeta">
+            <b>Invoice <%= h(invoice_number) %></b>
+            <span>Order <%= h(@selected_order["name"]) %></span>
+            <span><%= format_date(@selected_order["created_at"]) %></span>
           </div>
         </div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Transaction</th>
-              <th>Status</th>
-              <th>Gateway</th>
-              <th>Processed</th>
-              <th class="align-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <% transaction_rows.each do |transaction| %>
-              <% amount = transaction.dig("amountSet", "shopMoney", "amount") || transaction["amount"] %>
-              <% currency = transaction.dig("amountSet", "shopMoney", "currencyCode") || transaction["currency"] || @selected_order["total_price_currency"] %>
-              <tr>
-                <td><strong><%= h((transaction["kind"] || "Payment").to_s.tr("_", " ")) %></strong></td>
-                <td><span class="<%= badge_class(transaction["status"] || @selected_order["financial_status"]) %>"><%= h(transaction["status"] || @selected_order["financial_status"]) %></span></td>
-                <td><%= h(transaction["gateway"] || "Shopify") %></td>
-                <td><%= format_datetime(transaction["processedAt"] || @selected_order["updated_at"]) %></td>
-                <td class="align-right"><%= format_money(amount, currency) %></td>
-              </tr>
-            <% end %>
-          </tbody>
-        </table>
-      </section>
 
-      <section class="section-card">
-        <div class="toolbar">
-          <div>
-            <p class="eyebrow">Delivery history</p>
-            <h3>Recent invoice attempts</h3>
-          </div>
-        </div>
-        <% if @selected_order_invoice_deliveries.empty? %>
-          <div class="empty-state">No invoice has been sent for this order yet.</div>
-        <% else %>
-          <table class="data-table">
+        <div class="odt-doc-body">
+          <% if @can_email_invoice %>
+            <form method="post" action="<%= order_send_invoice_path(@selected_order["id"], @shop["shop_domain"]) %>" class="odt-send">
+              <div class="odt-send-top">
+                <span class="odt-send-ico">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4Z"></path></svg>
+                </span>
+                <div class="odt-send-txt">
+                  <strong>Send this invoice to the customer</strong>
+                  <span><%= h(@selected_order_invoice_filename) %></span>
+                </div>
+                <button class="button-primary" type="submit">Send invoice</button>
+              </div>
+              <div class="odt-send-fields">
+                <div class="grid-two">
+                  <div class="field">
+                    <label for="recipient_email">Recipient email</label>
+                    <input id="recipient_email" name="recipient_email" type="email" value="<%= h(@selected_order_invoice_draft["recipient_email"]) %>" required>
+                  </div>
+                  <div class="field">
+                    <label for="email_subject">Subject</label>
+                    <input id="email_subject" name="email_subject" type="text" value="<%= h(@selected_order_invoice_draft["subject"]) %>">
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="email_body">Message</label>
+                  <textarea id="email_body" name="email_body" rows="5"><%= h(@selected_order_invoice_draft["body_text"]) %></textarea>
+                </div>
+              </div>
+              <p class="odt-send-note">
+                <% if @invoice_delivery_mode == "smtp" %>
+                  Direct email delivery is enabled through SMTP.
+                <% else %>
+                  Sent invoices are saved to the local outbox until SMTP is configured.
+                <% end %>
+              </p>
+            </form>
+          <% else %>
+            <div class="odt-send is-locked">
+              <div class="odt-send-top">
+                <span class="odt-send-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 018 0v4"></path></svg></span>
+                <div class="odt-send-txt">
+                  <strong>Email delivery isn't on the Free plan</strong>
+                  <span>Download the PDF, or upgrade to email invoices directly.</span>
+                </div>
+              </div>
+              <div class="button-inline odt-send-fields">
+                <a class="button" href="<%= order_invoice_pdf_path(@selected_order["id"], @shop["shop_domain"]) %>">Download PDF</a>
+                <a class="button-ghost" href="/settings/plans">Upgrade to email</a>
+              </div>
+            </div>
+          <% end %>
+
+          <table class="odt-items">
             <thead>
-              <tr>
-                <th>When</th>
-                <th>Recipient</th>
-                <th>Status</th>
-                <th>Channel</th>
-                <th>File</th>
-                <th>Details</th>
-              </tr>
+              <tr><th>Item</th><th class="r">Qty</th><th class="r">Amount</th></tr>
             </thead>
             <tbody>
-              <% @selected_order_invoice_deliveries.each do |delivery| %>
+              <% @selected_order["line_items"].each do |line_item| %>
+                <% meta = [line_item["variantTitle"] || "Default variant", line_item["sku"], line_item["vendor"]].reject { |part| part.to_s.strip.empty? } %>
                 <tr>
-                  <td><%= format_datetime(delivery["created_at"]) %></td>
-                  <td><%= h(delivery["recipient_email"]) %></td>
-                  <td><span class="<%= badge_class(delivery["delivery_status"]) %>"><%= h(delivery["delivery_status"]) %></span></td>
-                  <td><%= h(delivery["delivery_channel"]) %></td>
-                  <td><%= h(delivery["invoice_filename"]) %></td>
                   <td>
-                    <% if delivery["error_message"] %>
-                      <span class="muted"><%= h(delivery["error_message"]) %></span>
-                    <% elsif delivery["outbox_path"] %>
-                      <span class="muted"><%= h(delivery["outbox_path"]) %></span>
-                    <% else %>
-                      <span class="muted"><%= h(delivery["delivery_target"] || "-") %></span>
-                    <% end %>
+                    <strong><%= h(line_item["title"]) %></strong>
+                    <div class="sub"><%= h(meta.join(" · ")) %></div>
                   </td>
+                  <td class="r"><%= line_item["quantity"] %></td>
+                  <td class="r"><%= format_money(line_item["totalAmount"], line_item["totalCurrency"]) %></td>
                 </tr>
               <% end %>
             </tbody>
           </table>
-        <% end %>
-      </section>
+
+          <div class="odt-totals">
+            <div class="row"><span>Subtotal</span><strong><%= format_money(subtotal, currency) %></strong></div>
+            <% if discounts.positive? %>
+              <div class="row"><span>Discounts</span><strong>-<%= format_money(discounts, currency) %></strong></div>
+            <% end %>
+            <div class="row"><span>Shipping</span><strong><%= format_money(@selected_order["total_shipping_amount"], currency) %></strong></div>
+            <div class="row"><span>Tax</span><strong><%= format_money(@selected_order["total_tax_amount"], currency) %></strong></div>
+            <% if refunded.positive? %>
+              <div class="row"><span>Refunded</span><strong>-<%= format_money(refunded, currency) %></strong></div>
+            <% end %>
+            <div class="row grand"><span>Total</span><span><%= format_money(@selected_order["total_price_amount"], currency) %></span></div>
+          </div>
+
+          <div class="odt-stamp <%= paid ? "is-paid" : "" %>">
+            <% if paid %>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 4 6 12 3 9"></path></svg>
+            <% end %>
+            <%= h(paid_stamp) %>
+          </div>
+        </div>
+      </article>
+
+      <div class="odt-tables">
+        <section class="odt-block">
+          <div class="odt-block-head">
+            <p class="eyebrow">Payments</p>
+            <h3>Transactions</h3>
+          </div>
+          <div class="odt-list">
+            <% transaction_rows.each do |transaction| %>
+              <% amount = transaction.dig("amountSet", "shopMoney", "amount") || transaction["amount"] %>
+              <% txn_currency = transaction.dig("amountSet", "shopMoney", "currencyCode") || transaction["currency"] || currency %>
+              <% txn_status = transaction["status"] || @selected_order["financial_status"] %>
+              <div class="odt-list-row">
+                <div class="odt-list-main">
+                  <strong><%= h(humanize_status(transaction["kind"] || "Payment")) %></strong>
+                  <span class="odt-list-meta"><%= h(transaction["gateway"] || "Shopify") %> · <%= format_datetime(transaction["processedAt"] || @selected_order["updated_at"]) %></span>
+                </div>
+                <div class="odt-list-side">
+                  <span class="<%= badge_class(txn_status) %>"><%= h(txn_status) %></span>
+                  <strong class="odt-list-amt"><%= format_money(amount, txn_currency) %></strong>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        </section>
+
+        <section class="odt-block">
+          <div class="odt-block-head">
+            <p class="eyebrow">Delivery history</p>
+            <h3>Recent invoice attempts</h3>
+          </div>
+          <% if @selected_order_invoice_deliveries.empty? %>
+            <div class="odt-empty">
+              <span class="odt-empty-ico">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>
+              </span>
+              <p>No invoice sent yet</p>
+              <span class="muted">Delivery attempts appear here once you send this invoice.</span>
+            </div>
+          <% else %>
+            <div class="odt-list">
+              <% @selected_order_invoice_deliveries.each do |delivery| %>
+                <% detail = delivery["error_message"] || delivery["outbox_path"] || delivery["delivery_target"] %>
+                <div class="odt-list-row">
+                  <div class="odt-list-main">
+                    <strong><%= h(delivery["recipient_email"]) %></strong>
+                    <span class="odt-list-meta">
+                      <%= [delivery["delivery_channel"], delivery["invoice_filename"], format_datetime(delivery["created_at"])].compact.reject { |part| part.to_s.strip.empty? }.map { |part| h(part) }.join(" · ") %>
+                    </span>
+                    <% if detail.to_s.strip != "" %>
+                      <span class="odt-list-meta muted"><%= h(detail) %></span>
+                    <% end %>
+                  </div>
+                  <div class="odt-list-side">
+                    <span class="<%= badge_class(delivery["delivery_status"]) %>"><%= h(delivery["delivery_status"]) %></span>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
+        </section>
+      </div>
     </div>
 
-    <aside class="order-side-column">
-      <section class="preview-card order-info-card">
-        <h3>Summary</h3>
-        <dl class="order-facts">
-          <div class="order-facts-row"><dt>Created</dt><dd><%= format_datetime(@selected_order["created_at"]) %></dd></div>
-          <div class="order-facts-row"><dt>Updated</dt><dd><%= format_datetime(@selected_order["updated_at"]) %></dd></div>
-          <div class="order-facts-row"><dt>Subtotal</dt><dd><%= format_money(subtotal, @selected_order["total_price_currency"]) %></dd></div>
-          <div class="order-facts-row"><dt>Discounts</dt><dd><%= format_money(-@selected_order["total_discounts_amount"], @selected_order["total_price_currency"]) %></dd></div>
-          <div class="order-facts-row"><dt>Shipping</dt><dd><%= format_money(@selected_order["total_shipping_amount"], @selected_order["total_price_currency"]) %></dd></div>
-          <div class="order-facts-row"><dt>Tax</dt><dd><%= format_money(@selected_order["total_tax_amount"], @selected_order["total_price_currency"]) %></dd></div>
-          <div class="order-facts-row"><dt>Refunded</dt><dd><%= format_money(@selected_order["total_refunded_amount"], @selected_order["total_price_currency"]) %></dd></div>
-          <div class="order-facts-row"><dt>Weight</dt><dd><%= format_weight(@selected_order["total_weight"]) %></dd></div>
-        </dl>
-      </section>
-
-      <section class="preview-card order-info-card">
+    <aside class="odt-rail">
+      <section class="section-card">
         <h3>Customer</h3>
-        <dl class="order-facts">
-          <div class="order-facts-row"><dt>Name</dt><dd><%= h(customer_name.empty? ? "Guest" : customer_name) %></dd></div>
-          <div class="order-facts-row"><dt>Email</dt><dd><%= h(@selected_order["customer_email"] || "No email") %></dd></div>
-          <div class="order-facts-row"><dt>Phone</dt><dd><%= h(@selected_order["customer_phone"] || "No phone") %></dd></div>
-          <div class="order-facts-row"><dt>Customer ID</dt><dd><%= h(@selected_order["customer_id"] || "-") %></dd></div>
+        <dl class="odt-facts">
+          <div class="row"><dt>Name</dt><dd><%= h(customer_name) %></dd></div>
+          <div class="row"><dt>Email</dt><dd><%= h(@selected_order["customer_email"] || "No email") %></dd></div>
+          <div class="row"><dt>Phone</dt><dd><%= h(@selected_order["customer_phone"] || "No phone") %></dd></div>
+          <div class="row"><dt>Customer ID</dt><dd class="tnum"><%= h(@selected_order["customer_id"] || "-") %></dd></div>
         </dl>
-        <% if customer_lines.any? %>
-          <div class="order-address-block">
-            <% customer_lines.each do |line| %><p><%= h(line) %></p><% end %>
-          </div>
+        <% customer_body = customer_lines.reject { |line| line == customer_name } %>
+        <% if customer_body.any? %>
+          <div class="odt-addr"><% customer_body.each do |line| %><p><%= h(line) %></p><% end %></div>
         <% end %>
       </section>
 
-      <section class="preview-card order-info-card">
+      <section class="section-card">
         <h3>Shipping</h3>
         <% if shipping_lines.any? %>
-          <div class="order-address-block">
-            <% shipping_lines.each do |line| %><p><%= h(line) %></p><% end %>
-          </div>
+          <div class="odt-addr"><% shipping_lines.each do |line| %><p><%= h(line) %></p><% end %></div>
         <% else %>
           <p class="muted">No shipping address was synced for this order.</p>
         <% end %>
       </section>
 
-      <section class="preview-card order-info-card">
-        <h3>Billing and notes</h3>
-        <% if billing_lines.any? %>
-          <div class="order-address-block">
-            <% billing_lines.each do |line| %><p><%= h(line) %></p><% end %>
-          </div>
-        <% else %>
-          <p class="muted">No billing address was synced for this order.</p>
-        <% end %>
+      <% if raw["note"].to_s.strip != "" || tags.any? %>
+        <section class="section-card">
+          <h3>Notes &amp; tags</h3>
+          <% if raw["note"].to_s.strip != "" %>
+            <div class="order-note"><strong>Note</strong><p><%= h(raw["note"]) %></p></div>
+          <% end %>
+          <% if tags.any? %>
+            <div class="odt-tags"><% tags.each do |tag| %><span class="badge badge-muted"><%= h(tag) %></span><% end %></div>
+          <% end %>
+        </section>
+      <% end %>
 
-        <% if raw["note"].to_s.strip != "" %>
-          <div class="order-note">
-            <strong>Note</strong>
-            <p><%= h(raw["note"]) %></p>
-          </div>
-        <% end %>
-
-        <% if tags.any? %>
-          <div class="order-tag-row">
-            <% tags.each do |tag| %><span class="pill pill-muted"><%= h(tag) %></span><% end %>
-          </div>
-        <% end %>
+      <section class="section-card">
+        <h3>Activity</h3>
+        <dl class="odt-facts">
+          <div class="row"><dt>Created</dt><dd><%= format_datetime(@selected_order["created_at"]) %></dd></div>
+          <div class="row"><dt>Updated</dt><dd><%= format_datetime(@selected_order["updated_at"]) %></dd></div>
+          <div class="row"><dt>Items</dt><dd class="tnum"><%= item_quantity %></dd></div>
+          <div class="row"><dt>Weight</dt><dd class="tnum"><%= format_weight(@selected_order["total_weight"]) %></dd></div>
+          <div class="row"><dt>Last synced</dt><dd><%= time_ago(@selected_order["synced_at"]) %></dd></div>
+        </dl>
       </section>
     </aside>
   </div>

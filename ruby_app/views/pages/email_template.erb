@@ -1,0 +1,72 @@
+<%
+  smtp = @invoice_delivery_mode == "smtp"
+  config = @notification_config["email"]
+%>
+
+<form method="post" action="/notifications/email" class="notif-page">
+  <a class="back-link" href="/settings">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"></path></svg>
+    Settings
+  </a>
+  <div class="settings-head">
+    <p class="eyebrow">Invoice sending</p>
+    <h1>Email template</h1>
+  </div>
+
+  <div class="notif-content">
+    <div class="notif-status">
+      <span class="notif-status-ico">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>
+      </span>
+      <div>
+        <strong>Email delivery</strong>
+        <p><% if smtp %>SMTP is configured — invoices sent from the order detail page go out directly by email.<% else %>SMTP is not configured yet. Invoices sent from the order detail page are saved to the local outbox for review.<% end %></p>
+        <div class="ph-label">Supported placeholders</div>
+        <div class="ph-chips">
+          <% @notification_placeholders.each do |token| %><code class="ph-chip">{{<%= token %>}}</code><% end %>
+        </div>
+      </div>
+    </div>
+
+    <section class="notif-card">
+      <div class="notif-head">
+        <span class="notif-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></span>
+        <div class="notif-head-text">
+          <strong>Email</strong>
+          <p>Subject and body used when invoices are emailed to customers.</p>
+        </div>
+        <label class="switch">
+          <input id="email_enabled" name="email_enabled" type="checkbox" value="1" <%= config["enabled"] ? "checked" : "" %> aria-label="Enable Email">
+          <span class="switch-track"></span>
+        </label>
+      </div>
+
+      <div class="notif-fields">
+        <div class="field">
+          <label for="email_subject">Subject</label>
+          <input id="email_subject" name="email_subject" type="text" value="<%= h(config["subject"]) %>">
+        </div>
+        <div class="field">
+          <label for="email_body">Body</label>
+          <textarea id="email_body" name="email_body" rows="8"><%= h(config["body"]) %></textarea>
+        </div>
+      </div>
+    </section>
+
+    <div class="notif-actions">
+      <button class="button-primary" type="submit">Save changes</button>
+    </div>
+  </div>
+</form>
+
+<script>
+  (function () {
+    document.querySelectorAll(".notif-card").forEach(function (card) {
+      var input = card.querySelector('input[type="checkbox"]');
+      if (!input) return;
+      var sync = function () { card.classList.toggle("is-collapsed", !input.checked); };
+      sync();
+      input.addEventListener("change", sync);
+    });
+  })();
+</script>
