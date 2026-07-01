@@ -849,7 +849,8 @@ module SendInvoice
         shop: shop,
         sync_status: @sync_engine.status(shop["shop_domain"]),
         invoice_config: merged_invoice_config(shop),
-        allowed_templates: allowed_template_ids(shop)
+        allowed_templates: allowed_template_ids(shop),
+        template_unlock_tiers: template_unlock_tiers
       })
     end
 
@@ -1860,6 +1861,21 @@ module SendInvoice
     def template_allowed?(shop, template_id)
       allowed = allowed_template_ids(shop)
       allowed.nil? || allowed.include?(template_id.to_s)
+    end
+
+    # The cheapest plan that includes a template (BILLING_PLANS is ordered
+    # free -> basic -> pro). Returns { "id" =>, "name" => } or nil.
+    def unlock_tier_for_template(template_id)
+      id, plan = BILLING_PLANS.find do |_, definition|
+        definition["templates"].nil? || definition["templates"].include?(template_id.to_s)
+      end
+      id && { "id" => id, "name" => plan["name"] }
+    end
+
+    def template_unlock_tiers
+      INVOICE_TEMPLATE_IDS.each_with_object({}) do |template_id, tiers|
+        tiers[template_id] = unlock_tier_for_template(template_id)
+      end
     end
 
     # Oldest date (YYYY-MM-DD) the plan may view, or nil for full history.

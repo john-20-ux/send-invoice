@@ -31,7 +31,7 @@
       <label for="search">Search</label>
       <input id="search" type="text" name="search" value="<%= h(@filters[:search]) %>" placeholder="Name, order, email">
     </div>
-    <div class="field" data-date-range>
+    <div class="field" data-date-range <% if @data_window_start %>data-min-date="<%= h(@data_window_start) %>"<% end %>>
       <label>Date range</label>
       <div class="date-range-native">
         <input id="from" type="date" name="from" value="<%= h(@filters[:from]) %>" aria-label="From date">
@@ -103,33 +103,36 @@
         <% end %>
       </tbody>
     </table>
-  <% end %>
-</section>
-
-<% if @order_result["total_pages"] > 1 %>
-  <section class="section-card pagination">
-    <span>Page <%= @order_result["page"] %> of <%= @order_result["total_pages"] %></span>
-    <div class="pagination-links">
-      <% if @order_result["page"] > 1 %>
-        <a class="button-ghost" href="<%= query_path(@pagination_path, {
-          "search" => @filters[:search],
-          "from" => @filters[:from],
-          "to" => @filters[:to],
-          "financial_status" => @filters[:financial_status],
-          "fulfillment_status" => @filters[:fulfillment_status],
-          "page" => @order_result["page"] - 1
-        }) %>">Previous</a>
-      <% end %>
-      <% if @order_result["page"] < @order_result["total_pages"] %>
-        <a class="button-ghost" href="<%= query_path(@pagination_path, {
-          "search" => @filters[:search],
-          "from" => @filters[:from],
-          "to" => @filters[:to],
-          "financial_status" => @filters[:financial_status],
-          "fulfillment_status" => @filters[:fulfillment_status],
-          "page" => @order_result["page"] + 1
-        }) %>">Next</a>
+    <%
+      page = @order_result["page"].to_i
+      limit = @filters[:limit].to_i
+      limit = 25 if limit <= 0
+      total = @order_result["total"].to_i
+      first = total.zero? ? 0 : (page - 1) * limit + 1
+      last = [page * limit, total].min
+    %>
+    <% total_pages = @order_result["total_pages"].to_i %>
+    <div class="table-footer">
+      <span>Showing <strong><%= first %>&ndash;<%= last %></strong> of <strong><%= total %></strong> orders</span>
+      <% if total_pages > 1 %>
+        <div class="table-footer-nav">
+          <span>Page <%= page %> of <%= total_pages %></span>
+          <% if page > 1 %>
+            <a class="button-ghost" href="<%= query_path(@pagination_path, {
+              "search" => @filters[:search], "from" => @filters[:from], "to" => @filters[:to],
+              "financial_status" => @filters[:financial_status], "fulfillment_status" => @filters[:fulfillment_status],
+              "page" => page - 1
+            }) %>">Previous</a>
+          <% end %>
+          <% if page < total_pages %>
+            <a class="button-ghost" href="<%= query_path(@pagination_path, {
+              "search" => @filters[:search], "from" => @filters[:from], "to" => @filters[:to],
+              "financial_status" => @filters[:financial_status], "fulfillment_status" => @filters[:fulfillment_status],
+              "page" => page + 1
+            }) %>">Next</a>
+          <% end %>
+        </div>
       <% end %>
     </div>
-  </section>
-<% end %>
+  <% end %>
+</section>

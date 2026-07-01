@@ -669,6 +669,13 @@
       if (!fromInput || !toInput) return;
       var form = root.closest("form");
 
+      // Plans with a data window (e.g. Free) cap how far back you can select.
+      var minDate = parseDate(root.dataset.minDate);
+      if (minDate) {
+        fromInput.min = root.dataset.minDate;
+        toInput.min = root.dataset.minDate;
+      }
+
       var state = {
         from: parseDate(fromInput.value),
         to: parseDate(toInput.value),
@@ -790,6 +797,10 @@
           if (state.from && state.to && current > state.from && current < state.to) {
             btn.classList.add("is-in-range");
           }
+          if (minDate && current < minDate) {
+            btn.classList.add("is-disabled");
+            btn.disabled = true;
+          }
           grid.appendChild(btn);
         }
 
@@ -803,6 +814,11 @@
         var second = new Date(state.view.getFullYear(), state.view.getMonth() + 1, 1);
         body.appendChild(buildMonth(state.view));
         body.appendChild(buildMonth(second));
+        var prevBtn = popover.querySelector('[data-nav="prev"]');
+        if (prevBtn && minDate) {
+          var minMonth = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+          prevBtn.disabled = state.view <= minMonth;
+        }
       }
 
       function renderPresets() {
@@ -821,8 +837,10 @@
       }
 
       var presetHtml = presets.map(function (preset) {
-        return '<button type="button" class="date-range-preset" data-preset="' +
-          preset.key + '">' + preset.label + "</button>";
+        var disabled = minDate && preset.range()[0] < minDate;
+        return '<button type="button" class="date-range-preset' +
+          (disabled ? " is-disabled" : "") + '" data-preset="' + preset.key + '"' +
+          (disabled ? " disabled" : "") + ">" + preset.label + "</button>";
       }).join("");
 
       popover.innerHTML =
@@ -833,6 +851,11 @@
         '<button type="button" class="date-range-nav-btn" data-nav="next" aria-label="Next month">›</button>' +
         "</div>" +
         '<div class="date-range-calendars"></div>' +
+        (minDate
+          ? '<div class="date-range-lock-hint">' +
+            '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>' +
+            "Free plan: last 30 days only</div>"
+          : "") +
         "</div>";
 
       render();
@@ -891,7 +914,7 @@
         }
 
         var day = event.target.closest(".date-range-day");
-        if (day && !day.classList.contains("is-empty")) {
+        if (day && !day.classList.contains("is-empty") && !day.disabled) {
           var picked = parseDate(day.dataset.date);
           if (!state.from || state.to || picked < state.from) {
             // Begin a new range.

@@ -1138,6 +1138,34 @@ html.nav-rail .sidebar-toggle {
   overflow: auto;
 }
 
+/* Summary footer under the orders table: count + current page range. */
+.table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
+  border-top: 1px solid var(--line);
+  background: #fcfcfc;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.table-footer strong {
+  color: var(--text);
+}
+
+.table-footer-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.table-footer-nav .button-ghost {
+  min-height: 30px;
+  padding: 0 12px;
+}
+
 .data-table {
   width: 100%;
   min-width: 860px;
@@ -1398,6 +1426,7 @@ html.nav-rail .sidebar-toggle {
 }
 
 .template-preset {
+  position: relative;
   display: grid;
   gap: 4px;
   padding: 10px 12px;
@@ -1415,18 +1444,43 @@ html.nav-rail .sidebar-toggle {
   background: var(--accent-weak);
 }
 
-/* Templates not included in the merchant's plan. */
+/* Templates not included in the merchant's plan: greyed with a tier badge
+   showing the plan that unlocks them. */
 .template-preset.is-locked {
-  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .template-preset.is-locked:hover {
   border-color: var(--line);
-  background: transparent;
+  background: #ffffff;
 }
 
-.template-preset.is-locked .template-preset-meta {
+.template-preset.is-locked .template-preset-name {
+  color: var(--muted);
+}
+
+.template-lock-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.template-lock-badge.tier-basic {
+  background: #eef2f1;
+  color: #4b5f59;
+}
+
+.template-lock-badge.tier-pro {
+  background: var(--accent-weak);
   color: var(--accent);
 }
 
@@ -2143,6 +2197,26 @@ html.nav-rail .sidebar-toggle {
   font-weight: 600;
 }
 
+/* Presets that fall outside the plan's data window. */
+.date-range-preset.is-disabled {
+  color: var(--faint, #9a9a9a);
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
+.date-range-preset.is-disabled:hover {
+  background: transparent;
+}
+
+.date-range-lock-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
 .date-range-main {
   position: relative;
 }
@@ -2225,7 +2299,13 @@ html.nav-rail .sidebar-toggle {
   cursor: default;
 }
 
-.date-range-day:not(.is-empty):hover {
+/* Days outside the plan's data window (e.g. Free = last 30 days). */
+.date-range-day.is-disabled {
+  color: #cdcdcd;
+  cursor: not-allowed;
+}
+
+.date-range-day:not(.is-empty):not(.is-disabled):hover {
   background: var(--accent-weak);
 }
 
