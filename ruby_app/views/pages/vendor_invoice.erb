@@ -10,26 +10,32 @@
   </div>
 </header>
 
-<section class="preview-grid">
-  <article class="preview-card">
-    <h3>Total revenue</h3>
-    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["total_revenue"], "USD") %></p>
-  </article>
-  <article class="preview-card">
-    <h3>Total commission</h3>
-    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["total_commission"], "USD") %></p>
-  </article>
-  <article class="preview-card">
-    <h3>Deductions</h3>
-    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["custom_deductions"], "USD") %></p>
-  </article>
-  <article class="preview-card">
-    <h3>Net payable</h3>
-    <p class="value" style="margin-top:12px"><%= format_money(@vendor_summary["net_payable"], "USD") %></p>
-  </article>
-</section>
-
 <section class="section-card">
   <h2>Payout summary</h2>
-  <p class="section-note" style="margin-top:10px">Use the browser print dialog to save this payout sheet as a PDF.</p>
+  <div class="payout-hero">
+    <div class="payout-net">
+      <span class="payout-net-label">Net payable</span>
+      <span class="payout-net-value"><%= format_money(@vendor_summary["net_payable"], "USD") %></span>
+      <span class="payout-net-note">Commission less deductions</span>
+    </div>
+    <div class="payout-breakdown">
+      <div class="payout-row">
+        <span class="k">Gross revenue <small><%= @vendor_summary["total_orders"] %> orders</small></span>
+        <span class="amt"><%= format_money(@vendor_summary["total_revenue"], "USD") %></span>
+      </div>
+      <div class="payout-row">
+        <span class="k">Commission <small>@ <%= @vendor_summary["commission_rate"] %>%</small></span>
+        <span class="amt"><%= format_money(@vendor_summary["total_commission"], "USD") %></span>
+      </div>
+      <div class="payout-row">
+        <span class="k">Deductions</span>
+        <span class="amt neg">&minus;<%= format_money(@vendor_summary["custom_deductions"], "USD") %></span>
+      </div>
+      <div class="payout-row payout-row-total">
+        <span class="k">Net payable</span>
+        <span class="amt"><%= format_money(@vendor_summary["net_payable"], "USD") %></span>
+      </div>
+    </div>
+  </div>
+  <p class="section-note" style="margin-top:16px">Use the browser print dialog to save this payout sheet as a PDF.</p>
 </section>
