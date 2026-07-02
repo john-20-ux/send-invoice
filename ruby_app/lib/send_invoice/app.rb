@@ -15,6 +15,9 @@ require "send_invoice/invoice_document"
 require "send_invoice/invoice_mailer"
 require "send_invoice/invoice_pdf"
 require "send_invoice/mock_data"
+require "send_invoice/slack_client"
+require "send_invoice/whatsapp_client"
+require "send_invoice/basecamp_client"
 
 module SendInvoice
   class App
@@ -80,11 +83,14 @@ module SendInvoice
       end
     end
 
-    def initialize(config:, store:, sync_engine:, shopify_client:)
+    def initialize(config:, store:, sync_engine:, shopify_client:, slack_client: nil, whatsapp_client: nil, basecamp_client: nil)
       @config = config
       @store = store
       @sync_engine = sync_engine
       @shopify_client = shopify_client
+      @slack_client = slack_client || SlackClient.new(config)
+      @whatsapp_client = whatsapp_client || WhatsAppClient.new(config)
+      @basecamp_client = basecamp_client || BasecampClient.new(config)
       @logger = build_logger
       @error_reporter = ErrorReporter.new(
         logger: @logger,
@@ -205,6 +211,24 @@ module SendInvoice
         handle_auth_start
       when ["GET", "/auth/callback"]
         handle_auth_callback
+      when ["GET", "/auth/slack"]
+        handle_slack_auth_start
+      when ["GET", "/auth/slack/callback"]
+        handle_slack_auth_callback
+      when ["POST", "/auth/slack/disconnect"]
+        handle_slack_disconnect
+      when ["POST", "/notifications/slack/test"]
+        handle_slack_test
+      when ["POST", "/notifications/whatsapp/test"]
+        handle_whatsapp_test
+      when ["GET", "/auth/basecamp"]
+        handle_basecamp_auth_start
+      when ["GET", "/auth/basecamp/callback"]
+        handle_basecamp_auth_callback
+      when ["POST", "/auth/basecamp/disconnect"]
+        handle_basecamp_disconnect
+      when ["POST", "/notifications/basecamp/test"]
+        handle_basecamp_test
       when ["POST", "/webhooks/bulk-operations-finish"]
         handle_bulk_operations_finish_webhook
       when ["POST", "/webhooks/app-uninstalled"]
@@ -396,6 +420,543 @@ module SendInvoice
         refresh_token_expires_at: refresh_expires_in ? (now + refresh_expires_in.to_i).iso8601 : nil,
         scopes: token_data["scope"]
       )
+    end
+
+    # --- Slack OAuth v2 (workspace install / incoming-webhook) ---
+
+    def handle_slack_auth_start
+      shop = require_onboarded_shop
+
+      # Real Slack credentials take precedence — run the true OAuth flow even in
+      # mock mode so a configured Slack app can be tested without Shopify keys.
+      if @config.slack_configured?
+        state = @slack_client.generate_nonce
+        @session["slack_oauth_state"] = state
+        redirect_to(@slack_client.authorize_url(@config.slack_redirect_uri, state))
+        return
+      end
+
+      # No Slack app configured: simulate a connection in demo mode so the flow
+      # stays clickable end-to-end; otherwise tell the operator what to set.
+      if @config.mock_mode?
+        complete_demo_slack_connection(shop)
+      else
+        flash!("error", "Slack is not configured yet. Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET.")
+        redirect_to("/notifications")
+      end
+    end
+
+    def handle_slack_auth_callback
+      shop = require_onboarded_shop
+
+      if (error = single_value(params["error"]))
+        flash!("error", "Slack connection was cancelled (#{error}).")
+        redirect_to("/notifications")
+        return
+      end
+
+      code = single_value(params["code"])
+      state = single_value(params["state"])
+      raise UnauthorizedError, "Missing Slack authorization code" if code.to_s.empty?
+      raise UnauthorizedError, "Invalid state parameter. Possible CSRF attack." unless state && state == @session["slack_oauth_state"]
+
+      @session.delete("slack_oauth_state")
+
+      result = @slack_client.exchange_code(code, @config.slack_redirect_uri)
+      webhook = result["incoming_webhook"] || {}
+      team = result["team"] || {}
+      channel = webhook["channel"]
+
+      @store.update_slack_connection(
+        shop["shop_domain"],
+        access_token: result["access_token"],
+        team_id: team["id"],
+        team_name: team["name"],
+        scope: result["scope"],
+        channel: channel,
+        incoming_webhook_url: webhook["url"]
+      )
+      enable_slack_channel(shop["shop_domain"], channel)
+
+      flash!("info", team["name"] ? "Slack connected to #{team['name']}." : "Slack connected.")
+      redirect_to("/notifications")
+    rescue SlackClient::Error => e
+      flash!("error", "Could not connect Slack: #{e.message}")
+      redirect_to("/notifications")
+    end
+
+    def handle_slack_test
+      shop = require_onboarded_shop
+
+      unless slack_connected?(shop)
+        flash!("error", "Connect Slack before sending a test alert.")
+        redirect_to("/notifications")
+        return
+      end
+
+      # The test button submits the whole Notifications form, so honor the channel
+      # currently picked in the dropdown — persist it first so the test (and the
+      # status line) reflect the new selection without a separate Save.
+      shop = persist_slack_channel_selection(shop)
+
+      # Demo connections aren't backed by a real Slack app; don't hit the network.
+      unless @config.slack_configured?
+        flash!("info", "Test alert sent (demo mode).")
+        redirect_to("/notifications")
+        return
+      end
+
+      deliver_slack_message(shop, slack_test_message(shop))
+      channel = slack_channel_for(shop)
+      flash!("info", channel.empty? ? "Test alert sent to Slack." : "Test alert sent to #{channel}.")
+      redirect_to("/notifications")
+    rescue SlackClient::Error => e
+      flash!("error", "Could not send Slack test alert: #{e.message}")
+      redirect_to("/notifications")
+    end
+
+    def slack_connected?(shop)
+      !shop["slack_connected_at"].to_s.empty?
+    end
+
+    # Save the channel submitted with the form (the dropdown selection) into the
+    # Slack notification settings, preserving the other channels. Returns the
+    # refreshed shop. No-op when the form didn't include a channel value.
+    def persist_slack_channel_selection(shop)
+      selected = single_value(params["slack_channel"])
+      return shop if selected.nil? || selected.to_s.strip.empty?
+
+      config = merged_notification_config(shop)
+      config["slack"] = config["slack"].merge("channel" => selected.to_s.strip)
+      @store.update_shop(shop["shop_domain"], "notification_config" => config)
+      @store.shop(shop["shop_domain"])
+    end
+
+    # Effective channel to post to: the one saved in notification settings,
+    # falling back to the channel captured at install (incoming-webhook flow).
+    def slack_channel_for(shop)
+      config = merged_notification_config(shop)
+      channel = config.dig("slack", "channel").to_s.strip
+      channel.empty? ? shop["slack_channel"].to_s.strip : channel
+    end
+
+    # Sends a Slack message via whichever mechanism the install granted: a stored
+    # incoming-webhook URL, or chat.postMessage with the bot token + a channel.
+    def deliver_slack_message(shop, text)
+      webhook_url = shop["slack_incoming_webhook_url"].to_s
+      return @slack_client.post_incoming_webhook(webhook_url, text) unless webhook_url.empty?
+
+      channel = slack_channel_for(shop)
+      raise SlackClient::Error, "No Slack channel set. Add a channel (e.g. #general) in the Slack settings." if channel.empty?
+
+      @slack_client.post_message(shop["slack_access_token"], channel, text)
+    end
+
+    def slack_test_message(shop)
+      store_name = shop["shop_name"].to_s.empty? ? shop["shop_domain"] : shop["shop_name"]
+      ":white_check_mark: *Send Invoice* is connected to *#{store_name}*. " \
+        "This is a test alert — invoice notifications will appear here."
+    end
+
+    # True when the shop has the Slack channel enabled, an active connection, and
+    # real Slack credentials configured (so we never hit the network in demo mode).
+    def slack_notifications_enabled?(shop)
+      return false unless @config.slack_configured?
+      return false unless slack_connected?(shop)
+
+      merged_notification_config(shop).dig("slack", "enabled") ? true : false
+    end
+
+    # Fan out invoice alerts to every enabled channel. Each is independently
+    # best-effort so one channel's failure can't affect another or the send.
+    def notify_channels_invoice_sent(shop, order, recipient_email, delivery_result)
+      notify_slack_invoice_sent(shop, order, recipient_email, delivery_result)
+      notify_whatsapp_invoice_sent(shop, order, recipient_email, delivery_result)
+      notify_basecamp_invoice_sent(shop, order, recipient_email, delivery_result)
+    end
+
+    # Best-effort Slack alert when an invoice is delivered. Swallows Slack errors
+    # (logged + reported) so a notification hiccup never fails the invoice send.
+    def notify_slack_invoice_sent(shop, order, recipient_email, delivery_result)
+      return unless slack_notifications_enabled?(shop)
+
+      deliver_slack_message(shop, slack_invoice_message(shop, order, recipient_email, delivery_result))
+    rescue StandardError => e
+      report_notify_failure("slack", order, e)
+    end
+
+    def notify_whatsapp_invoice_sent(shop, order, recipient_email, delivery_result)
+      return unless whatsapp_notifications_enabled?(shop)
+
+      deliver_whatsapp_message(shop, whatsapp_invoice_message(shop, order, recipient_email, delivery_result))
+    rescue StandardError => e
+      report_notify_failure("whatsapp", order, e)
+    end
+
+    def notify_basecamp_invoice_sent(shop, order, recipient_email, delivery_result)
+      return unless basecamp_notifications_enabled?(shop)
+
+      data = invoice_alert_data(shop, order, recipient_email, delivery_result)
+      subject = "Invoice #{data[:invoice]} #{data[:prepared_only] ? 'prepared' : 'sent'} — #{data[:store]}"
+      deliver_basecamp_message(shop, subject, basecamp_invoice_message(shop, order, recipient_email, delivery_result))
+    rescue StandardError => e
+      report_notify_failure("basecamp", order, e)
+    end
+
+    def report_notify_failure(channel, order, error)
+      @logger.warn({ level: "warn", event: "#{channel}_notify_failed", order: order["name"], error: error.message }.to_json)
+      @error_reporter.report(error, request_id: @request_id, event: "#{channel}_notify_failed")
+    end
+
+    # Common facts for an invoice-sent alert, formatted per channel below.
+    def invoice_alert_data(shop, order, recipient_email, delivery_result)
+      {
+        store: shop["shop_name"].to_s.empty? ? shop["shop_domain"] : shop["shop_name"],
+        invoice: order["name"].to_s.empty? ? "Invoice" : order["name"],
+        amount: format_money(order["total_price_amount"], order["total_price_currency"] || "USD"),
+        recipient: recipient_email.to_s,
+        date: Time.now.utc.strftime("%b %-d, %Y"),
+        prepared_only: delivery_result["status"] == "outbox"
+      }
+    end
+
+    # Slack: mrkdwn with emoji. A "prepared" (outbox) send is called out distinctly.
+    def slack_invoice_message(shop, order, recipient_email, delivery_result)
+      d = invoice_alert_data(shop, order, recipient_email, delivery_result)
+      header =
+        if d[:prepared_only]
+          ":page_facing_up: *Invoice #{d[:invoice]} prepared* for *#{d[:store]}*"
+        else
+          ":white_check_mark: *Invoice #{d[:invoice]} sent* for *#{d[:store]}*"
+        end
+      lines = [
+        header,
+        ":receipt: Amount: *#{d[:amount]}*",
+        ":email: #{d[:prepared_only] ? 'For' : 'Sent to'}: #{d[:recipient]}",
+        ":calendar: #{d[:date]}"
+      ]
+      lines << "_Saved to the local outbox — configure SMTP to email it directly._" if d[:prepared_only]
+      lines.join("\n")
+    end
+
+    # WhatsApp: plain text with WhatsApp's *bold* markers.
+    def whatsapp_invoice_message(shop, order, recipient_email, delivery_result)
+      d = invoice_alert_data(shop, order, recipient_email, delivery_result)
+      status = d[:prepared_only] ? "prepared" : "sent"
+      [
+        "✅ *Invoice #{d[:invoice]} #{status}*",
+        "",
+        "*Store:* #{d[:store]}",
+        "*Amount:* #{d[:amount]}",
+        "*#{d[:prepared_only] ? 'For' : 'Sent to'}:* #{d[:recipient]}",
+        "*Date:* #{d[:date]}",
+        "",
+        "— sent via Send Invoice"
+      ].join("\n")
+    end
+
+    # Basecamp: rich-text (HTML) message board content.
+    def basecamp_invoice_message(shop, order, recipient_email, delivery_result)
+      d = invoice_alert_data(shop, order, recipient_email, delivery_result)
+      status = d[:prepared_only] ? "prepared" : "sent"
+      note = d[:prepared_only] ? "<p><em>Saved to the local outbox — configure SMTP to email it directly.</em></p>" : ""
+      "<div>" \
+        "<p><strong>Invoice #{h(d[:invoice])} #{status}</strong> for <strong>#{h(d[:store])}</strong>.</p>" \
+        "<ul>" \
+        "<li>Amount: <strong>#{h(d[:amount])}</strong></li>" \
+        "<li>#{d[:prepared_only] ? 'For' : 'Sent to'}: #{h(d[:recipient])}</li>" \
+        "<li>Date: #{h(d[:date])}</li>" \
+        "</ul>#{note}" \
+        "</div>"
+    end
+
+    def handle_slack_disconnect
+      shop = require_onboarded_shop
+      @store.clear_slack_connection(shop["shop_domain"])
+
+      config = merged_notification_config(@store.shop(shop["shop_domain"]))
+      config["slack"] = config["slack"].merge("enabled" => false)
+      @store.update_shop(shop["shop_domain"], "notification_config" => config)
+
+      flash!("info", "Slack disconnected.")
+      redirect_to("/notifications")
+    end
+
+    # Reflect a completed Slack install into the notification settings so the
+    # channel toggles on and the picked channel is prefilled.
+    def enable_slack_channel(shop_domain, channel)
+      shop = @store.shop(shop_domain)
+      config = merged_notification_config(shop)
+      existing_channel = config.dig("slack", "channel").to_s
+      config["slack"] = {
+        "enabled" => true,
+        "channel" => channel.to_s.empty? ? existing_channel : channel
+      }
+      @store.update_shop(shop_domain, "notification_config" => config)
+    end
+
+    def complete_demo_slack_connection(shop)
+      @store.update_slack_connection(
+        shop["shop_domain"],
+        access_token: "xoxb-demo-token",
+        team_id: "T-DEMO",
+        team_name: "Demo Workspace",
+        scope: @config.slack_scopes.join(","),
+        channel: "#invoices",
+        incoming_webhook_url: "https://hooks.slack.com/services/demo/demo/demo"
+      )
+      enable_slack_channel(shop["shop_domain"], "#invoices")
+      flash!("info", "Slack connected (demo mode).")
+      redirect_to("/notifications")
+    end
+
+    # --- WhatsApp (Meta Cloud API) ---
+
+    def handle_whatsapp_test
+      shop = require_onboarded_shop
+
+      unless @config.whatsapp_configured?
+        flash!("error", "WhatsApp isn't configured yet. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN.")
+        redirect_to("/notifications")
+        return
+      end
+
+      shop = persist_whatsapp_phone_selection(shop)
+      recipient = whatsapp_recipient_for(shop)
+      if recipient.empty?
+        flash!("error", "Add a recipient phone number before sending a WhatsApp test.")
+        redirect_to("/notifications")
+        return
+      end
+
+      @whatsapp_client.send_text(recipient, whatsapp_test_message(shop))
+      flash!("info", "WhatsApp test message sent to #{recipient}.")
+      redirect_to("/notifications")
+    rescue WhatsAppClient::Error => e
+      flash!("error", "Could not send WhatsApp test: #{e.message}")
+      redirect_to("/notifications")
+    end
+
+    def whatsapp_recipient_for(shop)
+      merged_notification_config(shop).dig("whatsapp", "phone").to_s.strip
+    end
+
+    def whatsapp_notifications_enabled?(shop)
+      return false unless @config.whatsapp_configured?
+
+      config = merged_notification_config(shop)["whatsapp"] || {}
+      config["enabled"] && !config["phone"].to_s.strip.empty? ? true : false
+    end
+
+    def deliver_whatsapp_message(shop, text)
+      recipient = whatsapp_recipient_for(shop)
+      raise WhatsAppClient::Error, "No WhatsApp recipient number set." if recipient.empty?
+
+      @whatsapp_client.send_text(recipient, text)
+    end
+
+    # Persist the phone number submitted with the form so the test uses the value
+    # currently in the field (mirrors the Slack channel behavior).
+    def persist_whatsapp_phone_selection(shop)
+      phone = single_value(params["whatsapp_phone"])
+      return shop if phone.nil?
+
+      config = merged_notification_config(shop)
+      config["whatsapp"] = (config["whatsapp"] || {}).merge("phone" => phone.to_s.strip)
+      @store.update_shop(shop["shop_domain"], "notification_config" => config)
+      @store.shop(shop["shop_domain"])
+    end
+
+    def whatsapp_test_message(shop)
+      store_name = shop["shop_name"].to_s.empty? ? shop["shop_domain"] : shop["shop_name"]
+      "✅ Send Invoice is connected for #{store_name}. " \
+        "This is a test WhatsApp alert — invoice notifications will appear here."
+    end
+
+    # --- Basecamp (OAuth 2) ---
+
+    def handle_basecamp_auth_start
+      require_onboarded_shop
+
+      unless @config.basecamp_configured?
+        flash!("error", "Basecamp isn't configured yet. Set BASECAMP_CLIENT_ID and BASECAMP_CLIENT_SECRET.")
+        redirect_to("/notifications")
+        return
+      end
+
+      state = @basecamp_client.generate_nonce
+      @session["basecamp_oauth_state"] = state
+      redirect_to(@basecamp_client.authorize_url(@config.basecamp_redirect_uri, state))
+    end
+
+    def handle_basecamp_auth_callback
+      shop = require_onboarded_shop
+
+      if (error = single_value(params["error"]))
+        flash!("error", "Basecamp connection was cancelled (#{error}).")
+        redirect_to("/notifications")
+        return
+      end
+
+      code = single_value(params["code"])
+      state = single_value(params["state"])
+      raise UnauthorizedError, "Missing Basecamp authorization code" if code.to_s.empty?
+      raise UnauthorizedError, "Invalid state parameter. Possible CSRF attack." unless state && state == @session["basecamp_oauth_state"]
+
+      @session.delete("basecamp_oauth_state")
+
+      token = @basecamp_client.exchange_code(code, @config.basecamp_redirect_uri)
+      accounts = @basecamp_client.accounts(token.fetch("access_token"))
+      account = accounts.first
+      raise BasecampClient::Error, "No Basecamp (BC3) account is available for this login." unless account
+
+      @store.update_basecamp_connection(
+        shop["shop_domain"],
+        access_token: token.fetch("access_token"),
+        refresh_token: token["refresh_token"],
+        token_expires_at: basecamp_expires_at(token),
+        account_id: account["id"].to_s,
+        account_name: account["name"]
+      )
+      enable_basecamp_channel(shop["shop_domain"])
+
+      flash!("info", account["name"] ? "Basecamp connected to #{account['name']}." : "Basecamp connected.")
+      redirect_to("/notifications")
+    rescue BasecampClient::Error => e
+      flash!("error", "Could not connect Basecamp: #{e.message}")
+      redirect_to("/notifications")
+    end
+
+    def handle_basecamp_disconnect
+      shop = require_onboarded_shop
+      @store.clear_basecamp_connection(shop["shop_domain"])
+
+      config = merged_notification_config(@store.shop(shop["shop_domain"]))
+      config["basecamp"] = (config["basecamp"] || {}).merge("enabled" => false)
+      @store.update_shop(shop["shop_domain"], "notification_config" => config)
+
+      flash!("info", "Basecamp disconnected.")
+      redirect_to("/notifications")
+    end
+
+    def handle_basecamp_test
+      shop = require_onboarded_shop
+
+      unless basecamp_connected?(shop)
+        flash!("error", "Connect Basecamp before sending a test update.")
+        redirect_to("/notifications")
+        return
+      end
+
+      shop = persist_basecamp_project_selection(shop)
+      deliver_basecamp_message(shop, "Send Invoice test", basecamp_test_message(shop))
+      flash!("info", "Test update posted to Basecamp.")
+      redirect_to("/notifications")
+    rescue BasecampClient::Error => e
+      flash!("error", "Could not post Basecamp test: #{e.message}")
+      redirect_to("/notifications")
+    end
+
+    def basecamp_connected?(shop)
+      !shop["basecamp_connected_at"].to_s.empty?
+    end
+
+    def basecamp_notifications_enabled?(shop)
+      return false unless @config.basecamp_configured?
+      return false unless basecamp_connected?(shop)
+
+      config = merged_notification_config(shop)["basecamp"] || {}
+      config["enabled"] && !config["project_id"].to_s.empty? && !config["message_board_id"].to_s.empty? ? true : false
+    end
+
+    def enable_basecamp_channel(shop_domain)
+      shop = @store.shop(shop_domain)
+      config = merged_notification_config(shop)
+      config["basecamp"] = (config["basecamp"] || {}).merge("enabled" => true)
+      @store.update_shop(shop_domain, "notification_config" => config)
+    end
+
+    # The project dropdown submits "project_id:board_id:name"; split and store all
+    # three so we can post without an extra lookup and show a readable name.
+    def persist_basecamp_project_selection(shop)
+      raw = single_value(params["basecamp_project"])
+      return shop if raw.nil? || raw.to_s.strip.empty?
+
+      project_id, board_id, name = raw.to_s.split(":", 3)
+      return shop if project_id.to_s.empty? || board_id.to_s.empty?
+
+      config = merged_notification_config(shop)
+      config["basecamp"] = (config["basecamp"] || {}).merge(
+        "project_id" => project_id, "message_board_id" => board_id, "project_name" => name.to_s
+      )
+      @store.update_shop(shop["shop_domain"], "notification_config" => config)
+      @store.shop(shop["shop_domain"])
+    end
+
+    def basecamp_project_choices(shop)
+      return [nil, nil] unless basecamp_connected?(shop) && @config.basecamp_configured?
+
+      token = basecamp_access_token_fresh(shop)
+      return [nil, nil] if token.to_s.empty?
+
+      [@basecamp_client.list_projects(shop["basecamp_account_id"], token), nil]
+    rescue BasecampClient::Error => e
+      [nil, e.message]
+    end
+
+    def deliver_basecamp_message(shop, subject, content)
+      config = merged_notification_config(shop)["basecamp"] || {}
+      project_id = config["project_id"].to_s
+      board_id = config["message_board_id"].to_s
+      raise BasecampClient::Error, "Select a Basecamp project to post to." if project_id.empty? || board_id.empty?
+
+      account_id = shop["basecamp_account_id"].to_s
+      token = basecamp_access_token_fresh(shop)
+      begin
+        @basecamp_client.post_message(account_id, token, project_id, board_id, subject, content)
+      rescue BasecampClient::UnauthorizedError
+        # Token expired between fetch and use — refresh once and retry.
+        token = basecamp_refresh_and_store(shop)
+        @basecamp_client.post_message(account_id, token, project_id, board_id, subject, content)
+      end
+    end
+
+    # Returns a non-expired access token, refreshing + persisting when needed.
+    def basecamp_access_token_fresh(shop)
+      token = shop["basecamp_access_token"].to_s
+      refresh = shop["basecamp_refresh_token"].to_s
+      return token if token.empty? || refresh.empty? || !basecamp_token_expired?(shop["basecamp_token_expires_at"])
+
+      basecamp_refresh_and_store(shop)
+    end
+
+    def basecamp_refresh_and_store(shop)
+      refreshed = @basecamp_client.refresh_access_token(shop["basecamp_refresh_token"].to_s)
+      updated = @store.update_basecamp_tokens(
+        shop["shop_domain"],
+        access_token: refreshed.fetch("access_token"),
+        token_expires_at: basecamp_expires_at(refreshed)
+      )
+      updated["basecamp_access_token"].to_s
+    end
+
+    def basecamp_token_expired?(expires_at)
+      return false if expires_at.to_s.empty?
+
+      Time.parse(expires_at) <= (Time.now.utc + 60)
+    rescue ArgumentError
+      false
+    end
+
+    def basecamp_expires_at(token)
+      expires_in = token["expires_in"]
+      expires_in ? (Time.now.utc + expires_in.to_i).iso8601 : nil
+    end
+
+    def basecamp_test_message(shop)
+      store_name = shop["shop_name"].to_s.empty? ? shop["shop_domain"] : shop["shop_name"]
+      "<div><em>Send Invoice</em> is connected for #{h(store_name)}. " \
+        "This is a test update — invoice notifications will appear here.</div>"
     end
 
     def render_onboarding(step)
@@ -747,6 +1308,10 @@ module SendInvoice
         else
           flash!("info", "Invoice sent to #{recipient_email}.")
         end
+
+        # Fire-and-forget channel alerts. Best-effort: a notification failure must
+        # never break the invoice send, which has already succeeded above.
+        notify_channels_invoice_sent(shop, order, recipient_email, delivery_result)
       rescue StandardError => e
         @store.create_invoice_delivery(shop["shop_domain"], order["id"], {
           "recipient_email" => recipient_email,
@@ -1027,6 +1592,8 @@ module SendInvoice
 
     def render_notifications
       shop = require_onboarded_shop
+      slack_channels, slack_channels_error = slack_channel_choices(shop)
+      basecamp_projects, basecamp_projects_error = basecamp_project_choices(shop)
       render_page("pages/notifications", {
         page_title: "Notifications",
         # Keep the Settings nav item active — Notifications is a settings sub-page.
@@ -1035,8 +1602,28 @@ module SendInvoice
         sync_status: @sync_engine.status(shop["shop_domain"]),
         notification_config: merged_notification_config(shop),
         invoice_delivery_mode: invoice_delivery_mode_label,
-        notification_placeholders: notification_placeholders
+        notification_placeholders: notification_placeholders,
+        slack_channels: slack_channels,
+        slack_channels_error: slack_channels_error,
+        whatsapp_configured: @config.whatsapp_configured?,
+        basecamp_configured: @config.basecamp_configured?,
+        basecamp_projects: basecamp_projects,
+        basecamp_projects_error: basecamp_projects_error
       })
+    end
+
+    # Live channel list for the Slack picker: [channels, error_message]. Returns
+    # [nil, nil] when there's nothing to fetch (not connected / demo mode) so the
+    # view falls back to a free-text channel field.
+    def slack_channel_choices(shop)
+      return [nil, nil] unless slack_connected?(shop) && @config.slack_configured?
+
+      token = shop["slack_access_token"].to_s
+      return [nil, nil] if token.empty?
+
+      [@slack_client.list_channels(token), nil]
+    rescue SlackClient::Error => e
+      [nil, e.message]
     end
 
     def handle_notification_save
@@ -1056,10 +1643,19 @@ module SendInvoice
         "enabled" => single_value(params["slack_enabled"]) == "1",
         "channel" => single_value(params["slack_channel"]).to_s
       }
-      config["basecamp"] = {
-        "enabled" => single_value(params["basecamp_enabled"]) == "1",
-        "project" => single_value(params["basecamp_project"]).to_s
-      }
+      # Basecamp: the project dropdown submits "project_id:board_id:name". Merge
+      # onto the existing block so a bare enable/disable doesn't wipe the project.
+      basecamp_raw = single_value(params["basecamp_project"]).to_s
+      basecamp_selection =
+        if basecamp_raw.empty?
+          {}
+        else
+          project_id, board_id, name = basecamp_raw.split(":", 3)
+          { "project_id" => project_id, "message_board_id" => board_id, "project_name" => name.to_s }
+        end
+      config["basecamp"] = (config["basecamp"] || {})
+                           .merge("enabled" => single_value(params["basecamp_enabled"]) == "1")
+                           .merge(basecamp_selection)
 
       @store.update_shop(shop["shop_domain"], "notification_config" => config)
       flash!("info", "Notification settings updated.")

@@ -2140,6 +2140,18 @@ html.nav-rail .sidebar-toggle {
   height: 19px;
 }
 
+/* Brand marks (e.g. Slack) keep their own colors, so use a neutral tile. */
+.notif-ico--brand {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: inherit;
+}
+
+.notif-ico--brand svg {
+  width: 20px;
+  height: 20px;
+}
+
 .notif-head-text {
   flex: 1;
   min-width: 0;
@@ -2163,6 +2175,42 @@ html.nav-rail .sidebar-toggle {
 
 .notif-card.is-collapsed .notif-fields {
   display: none;
+}
+
+/* Connected-account block (Slack): status row, actions, and note aligned. */
+.notif-connect {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.notif-connect-status {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.notif-connect-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.notif-connect .button-inline {
+  margin: 0;
+}
+
+.notif-connect-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .notif-actions {

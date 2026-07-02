@@ -111,6 +111,68 @@ module SendInvoice
       shop(shop_domain)
     end
 
+    # Persist a completed Slack OAuth v2 install. The token and webhook URL are
+    # encrypted at rest by update_shop.
+    def update_slack_connection(shop_domain, access_token:, team_id: nil, team_name: nil, scope: nil, channel: nil, incoming_webhook_url: nil)
+      update_shop(shop_domain, {
+        "slack_access_token" => access_token,
+        "slack_team_id" => team_id,
+        "slack_team_name" => team_name,
+        "slack_scope" => scope,
+        "slack_channel" => channel,
+        "slack_incoming_webhook_url" => incoming_webhook_url,
+        "slack_connected_at" => Time.now.utc.iso8601
+      })
+      shop(shop_domain)
+    end
+
+    def clear_slack_connection(shop_domain)
+      update_shop(shop_domain, {
+        "slack_access_token" => nil,
+        "slack_team_id" => nil,
+        "slack_team_name" => nil,
+        "slack_scope" => nil,
+        "slack_channel" => nil,
+        "slack_incoming_webhook_url" => nil,
+        "slack_connected_at" => nil
+      })
+      shop(shop_domain)
+    end
+
+    # Persist a completed Basecamp OAuth 2 install (tokens encrypted at rest).
+    def update_basecamp_connection(shop_domain, access_token:, refresh_token: nil, token_expires_at: nil, account_id: nil, account_name: nil)
+      update_shop(shop_domain, {
+        "basecamp_access_token" => access_token,
+        "basecamp_refresh_token" => refresh_token,
+        "basecamp_token_expires_at" => token_expires_at,
+        "basecamp_account_id" => account_id,
+        "basecamp_account_name" => account_name,
+        "basecamp_connected_at" => Time.now.utc.iso8601
+      })
+      shop(shop_domain)
+    end
+
+    # Update just the rotating Basecamp tokens after a refresh.
+    def update_basecamp_tokens(shop_domain, access_token:, token_expires_at: nil, refresh_token: nil)
+      attributes = { "basecamp_access_token" => access_token }
+      attributes["basecamp_token_expires_at"] = token_expires_at unless token_expires_at.nil?
+      attributes["basecamp_refresh_token"] = refresh_token unless refresh_token.nil?
+      update_shop(shop_domain, attributes)
+      shop(shop_domain)
+    end
+
+    def clear_basecamp_connection(shop_domain)
+      update_shop(shop_domain, {
+        "basecamp_access_token" => nil,
+        "basecamp_refresh_token" => nil,
+        "basecamp_token_expires_at" => nil,
+        "basecamp_account_id" => nil,
+        "basecamp_account_name" => nil,
+        "basecamp_connected_at" => nil
+      })
+      shop(shop_domain)
+    end
+
     def mark_shop_uninstalled(shop_domain, uninstalled_at:, scheduled_for_deletion_at:)
       shop_domain = normalize_text(shop_domain)
       now = Time.now.utc.iso8601
@@ -578,7 +640,8 @@ module SendInvoice
         when "onboarded"
           updates << "onboarded = ?"
           values << truthy_db(value)
-        when "access_token", "refresh_token"
+        when "access_token", "refresh_token", "slack_access_token", "slack_incoming_webhook_url",
+             "basecamp_access_token", "basecamp_refresh_token"
           updates << "#{key} = ?"
           values << encrypt_token(value)
         else
@@ -1248,7 +1311,20 @@ module SendInvoice
         "font_name" => normalize_text(row["font_name"]),
         "notification_config" => JSON.parse(row["notification_config"].to_s),
         "invoice_template_config" => JSON.parse(row["invoice_template_config"].to_s),
-        "vendor_edits" => JSON.parse(row["vendor_edits"].to_s)
+        "vendor_edits" => JSON.parse(row["vendor_edits"].to_s),
+        "slack_access_token" => decrypt_token(normalize_text(row["slack_access_token"])),
+        "slack_team_id" => normalize_text(row["slack_team_id"]),
+        "slack_team_name" => normalize_text(row["slack_team_name"]),
+        "slack_scope" => normalize_text(row["slack_scope"]),
+        "slack_channel" => normalize_text(row["slack_channel"]),
+        "slack_incoming_webhook_url" => decrypt_token(normalize_text(row["slack_incoming_webhook_url"])),
+        "slack_connected_at" => normalize_text(row["slack_connected_at"]),
+        "basecamp_access_token" => decrypt_token(normalize_text(row["basecamp_access_token"])),
+        "basecamp_refresh_token" => decrypt_token(normalize_text(row["basecamp_refresh_token"])),
+        "basecamp_token_expires_at" => normalize_text(row["basecamp_token_expires_at"]),
+        "basecamp_account_id" => normalize_text(row["basecamp_account_id"]),
+        "basecamp_account_name" => normalize_text(row["basecamp_account_name"]),
+        "basecamp_connected_at" => normalize_text(row["basecamp_connected_at"])
       }
     end
 

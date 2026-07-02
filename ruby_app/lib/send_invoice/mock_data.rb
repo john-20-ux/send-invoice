@@ -57,7 +57,7 @@ module SendInvoice
       "email" => { "enabled" => true, "subject" => "Your Invoice from {{company}}", "body" => "Hi {{name}},\n\nPlease find your invoice attached.\n\nThank you!" },
       "whatsapp" => { "enabled" => false, "phone" => "", "message" => 'Hi {{name}}, your invoice #{{invoice_number}} is ready.' },
       "slack" => { "enabled" => false, "channel" => "#invoices" },
-      "basecamp" => { "enabled" => false, "project" => "" }
+      "basecamp" => { "enabled" => false, "project_id" => "", "message_board_id" => "", "project_name" => "" }
     }.freeze
 
     DEFAULT_INVOICE_TEMPLATE_CONFIG = {

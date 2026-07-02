@@ -139,6 +139,423 @@ class SendInvoiceAppTest < Minitest::Test
     clear_shopify_env
   end
 
+  def test_slack_auth_start_redirects_to_slack_with_state
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    response = perform(app, "GET", "/auth/slack", { "shop" => "sync-test.myshopify.com" })
+
+    assert_equal 302, response.status
+    assert_includes response["Location"], "slack.com/oauth/v2/authorize"
+    assert_includes response["Location"], "state=test-nonce"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_auth_callback_persists_encrypted_connection
+    payload = {
+      "ok" => true,
+      "access_token" => "xoxb-real-token",
+      "scope" => "incoming-webhook",
+      "team" => { "id" => "T123", "name" => "Acme HQ" },
+      "incoming_webhook" => { "channel" => "#alerts", "url" => "https://hooks.slack.com/services/x/y/z" }
+    }
+    slack = FakeSlackClient.new(payload)
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    session_id = SecureRandom.hex(24)
+    store.save_session(session_id, "sync-test.myshopify.com", {
+      "shop_domain" => "sync-test.myshopify.com",
+      "slack_oauth_state" => "state-123"
+    })
+    cookies = [WEBrick::Cookie.new(config.session_cookie_name, session_id)]
+
+    response = perform(app, "GET", "/auth/slack/callback",
+                       { "code" => "auth-code", "state" => "state-123" }, cookies)
+
+    assert_equal 302, response.status
+    assert_equal "/notifications", response["Location"]
+
+    shop = store.shop("sync-test.myshopify.com")
+    assert_equal "xoxb-real-token", shop["slack_access_token"]
+    assert_equal "T123", shop["slack_team_id"]
+    assert_equal "Acme HQ", shop["slack_team_name"]
+    assert_equal "#alerts", shop["slack_channel"]
+    assert_equal "https://hooks.slack.com/services/x/y/z", shop["slack_incoming_webhook_url"]
+    refute_nil shop["slack_connected_at"]
+    assert_equal true, shop["notification_config"]["slack"]["enabled"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_auth_callback_rejects_state_mismatch
+    slack = FakeSlackClient.new({ "ok" => true, "access_token" => "xoxb-real-token" })
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    session_id = SecureRandom.hex(24)
+    store.save_session(session_id, "sync-test.myshopify.com", {
+      "shop_domain" => "sync-test.myshopify.com",
+      "slack_oauth_state" => "expected-state"
+    })
+    cookies = [WEBrick::Cookie.new(config.session_cookie_name, session_id)]
+
+    response = perform(app, "GET", "/auth/slack/callback",
+                       { "code" => "auth-code", "state" => "attacker-state" }, cookies)
+
+    assert_equal 302, response.status
+    assert_nil slack.exchanged
+    assert_nil store.shop("sync-test.myshopify.com")["slack_access_token"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_test_alert_posts_to_incoming_webhook
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com",
+                                  access_token: "xoxb-real-token", team_name: "Acme HQ",
+                                  channel: "#alerts", incoming_webhook_url: "https://hooks.slack.com/services/x/y/z")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    response = perform(app, "POST", "/notifications/slack/test", { "shop" => "sync-test.myshopify.com" })
+
+    assert_equal 302, response.status
+    assert_equal "/notifications", response["Location"]
+    assert_equal 1, slack.webhook_posts.length
+    assert_equal "https://hooks.slack.com/services/x/y/z", slack.webhook_posts.first[:url]
+    assert_includes slack.webhook_posts.first[:text], "Sync Test"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_test_alert_posts_via_chat_postmessage_when_no_webhook
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    # chat:write install: bot token but no incoming-webhook URL.
+    store.update_slack_connection("sync-test.myshopify.com",
+                                  access_token: "xoxb-bot-token", team_name: "Acme HQ")
+    shop = store.shop("sync-test.myshopify.com")
+    config_json = shop["notification_config"]
+    config_json["slack"] = { "enabled" => true, "channel" => "#ops" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => config_json)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    response = perform(app, "POST", "/notifications/slack/test", { "shop" => "sync-test.myshopify.com" })
+
+    assert_equal 302, response.status
+    assert_empty slack.webhook_posts
+    assert_equal 1, slack.messages.length
+    assert_equal "xoxb-bot-token", slack.messages.first[:token]
+    assert_equal "#ops", slack.messages.first[:channel]
+    assert_includes slack.messages.first[:text], "Sync Test"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_notifications_renders_slack_channel_picker_when_connected
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com",
+                                  access_token: "xoxb-bot-token", team_name: "Joy's Inc")
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["slack"] = { "enabled" => true, "channel" => "C200" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    response = perform(app, "GET", "/notifications", { "shop" => "sync-test.myshopify.com" })
+
+    assert_equal 200, response.status
+    assert_includes response.body, "<select id=\"slack_channel\" name=\"slack_channel\">"
+    assert_includes response.body, "value=\"C200\" selected"
+    assert_includes response.body, "finance-private"
+    # Saved channel ID resolves to a human-readable name in the status line.
+    assert_includes response.body, "posting to <strong>#invoices</strong>"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_invoice_send_posts_slack_alert_when_enabled
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com", access_token: "xoxb-bot", team_name: "Joy's Inc")
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["slack"] = { "enabled" => true, "channel" => "C200" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    shop = store.shop("sync-test.myshopify.com")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    order = { "name" => "#1001", "total_price_amount" => 1234.5, "total_price_currency" => "USD" }
+    app.send(:notify_slack_invoice_sent, shop, order, "buyer@example.com", { "status" => "sent" })
+
+    assert_equal 1, slack.messages.length
+    assert_equal "C200", slack.messages.first[:channel]
+    assert_includes slack.messages.first[:text], "#1001"
+    assert_includes slack.messages.first[:text], "buyer@example.com"
+    assert_includes slack.messages.first[:text], "$1,234.50"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_invoice_send_skips_slack_when_channel_disabled
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com", access_token: "xoxb-bot")
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["slack"] = { "enabled" => false, "channel" => "C200" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    shop = store.shop("sync-test.myshopify.com")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    app.send(:notify_slack_invoice_sent, shop,
+             { "name" => "#1001", "total_price_amount" => 10, "total_price_currency" => "USD" },
+             "buyer@example.com", { "status" => "sent" })
+
+    assert_empty slack.messages
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_invoice_send_swallows_slack_errors
+    slack = FakeSlackClient.new
+    slack.raise_on_message!
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com", access_token: "xoxb-bot")
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["slack"] = { "enabled" => true, "channel" => "C200" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    shop = store.shop("sync-test.myshopify.com")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    # Must not raise — invoice delivery already succeeded before this runs.
+    app.send(:notify_slack_invoice_sent, shop,
+             { "name" => "#1001", "total_price_amount" => 10, "total_price_currency" => "USD" },
+             "buyer@example.com", { "status" => "sent" })
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_test_alert_uses_and_saves_submitted_channel
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com", access_token: "xoxb-bot", team_name: "Joy's Inc")
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["slack"] = { "enabled" => true, "channel" => "C_OLD" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    # Simulate the dropdown submitting a newly-picked channel with the test button.
+    response = perform(app, "POST", "/notifications/slack/test",
+                       { "shop" => "sync-test.myshopify.com", "slack_channel" => "C_NEW" })
+
+    assert_equal 302, response.status
+    assert_equal "C_NEW", slack.messages.first[:channel]
+    # And the new selection is persisted, so the status line + next send use it.
+    saved = store.shop("sync-test.myshopify.com")["notification_config"]["slack"]["channel"]
+    assert_equal "C_NEW", saved
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_whatsapp_test_message_sends_and_persists_phone
+    wa = FakeWhatsAppClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "WHATSAPP_PHONE_NUMBER_ID" => "pid", "WHATSAPP_ACCESS_TOKEN" => "tok" })
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, whatsapp_client: wa)
+
+    response = perform(app, "POST", "/notifications/whatsapp/test",
+                       { "shop" => "sync-test.myshopify.com", "whatsapp_phone" => "+1 555 000 1234" })
+
+    assert_equal 302, response.status
+    assert_equal 1, wa.sent.length
+    assert_equal "+1 555 000 1234", wa.sent.first[:to]
+    saved = store.shop("sync-test.myshopify.com")["notification_config"]["whatsapp"]["phone"]
+    assert_equal "+1 555 000 1234", saved
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_invoice_send_sends_whatsapp_when_enabled
+    wa = FakeWhatsAppClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "WHATSAPP_PHONE_NUMBER_ID" => "pid", "WHATSAPP_ACCESS_TOKEN" => "tok" })
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["whatsapp"] = { "enabled" => true, "phone" => "+15550001234", "message" => "" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    shop = store.shop("sync-test.myshopify.com")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, whatsapp_client: wa)
+
+    app.send(:notify_whatsapp_invoice_sent, shop,
+             { "name" => "#1001", "total_price_amount" => 50, "total_price_currency" => "USD" },
+             "buyer@example.com", { "status" => "sent" })
+
+    assert_equal 1, wa.sent.length
+    assert_includes wa.sent.first[:body], "#1001"
+    assert_includes wa.sent.first[:body], "buyer@example.com"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_basecamp_auth_callback_persists_connection
+    bc = FakeBasecampClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "BASECAMP_CLIENT_ID" => "cid", "BASECAMP_CLIENT_SECRET" => "sec" })
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, basecamp_client: bc)
+
+    session_id = SecureRandom.hex(24)
+    store.save_session(session_id, "sync-test.myshopify.com", {
+      "shop_domain" => "sync-test.myshopify.com",
+      "basecamp_oauth_state" => "bc-state"
+    })
+    cookies = [WEBrick::Cookie.new(config.session_cookie_name, session_id)]
+
+    response = perform(app, "GET", "/auth/basecamp/callback",
+                       { "code" => "auth-code", "state" => "bc-state" }, cookies)
+
+    assert_equal 302, response.status
+    shop = store.shop("sync-test.myshopify.com")
+    assert_equal "bc-access", shop["basecamp_access_token"]
+    assert_equal "bc-refresh", shop["basecamp_refresh_token"]
+    assert_equal "999", shop["basecamp_account_id"]
+    assert_equal "Acme HQ", shop["basecamp_account_name"]
+    refute_nil shop["basecamp_connected_at"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_basecamp_test_update_posts_to_selected_project
+    bc = FakeBasecampClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "BASECAMP_CLIENT_ID" => "cid", "BASECAMP_CLIENT_SECRET" => "sec" })
+    store.update_basecamp_connection("sync-test.myshopify.com",
+                                     access_token: "bc-access", refresh_token: "bc-refresh",
+                                     token_expires_at: (Time.now.utc + 100_000).iso8601,
+                                     account_id: "999", account_name: "Acme HQ")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, basecamp_client: bc)
+
+    response = perform(app, "POST", "/notifications/basecamp/test",
+                       { "shop" => "sync-test.myshopify.com", "basecamp_project" => "11:22:Payouts" })
+
+    assert_equal 302, response.status
+    assert_equal 1, bc.posted.length
+    assert_equal "11", bc.posted.first[:project_id]
+    assert_equal "22", bc.posted.first[:board_id]
+    saved = store.shop("sync-test.myshopify.com")["notification_config"]["basecamp"]
+    assert_equal "11", saved["project_id"]
+    assert_equal "22", saved["message_board_id"]
+    assert_equal "Payouts", saved["project_name"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_invoice_send_posts_basecamp_update_when_enabled
+    bc = FakeBasecampClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "BASECAMP_CLIENT_ID" => "cid", "BASECAMP_CLIENT_SECRET" => "sec" })
+    store.update_basecamp_connection("sync-test.myshopify.com",
+                                     access_token: "bc-access", refresh_token: "bc-refresh",
+                                     token_expires_at: (Time.now.utc + 100_000).iso8601,
+                                     account_id: "999", account_name: "Acme HQ")
+    shop = store.shop("sync-test.myshopify.com")
+    cfg = shop["notification_config"]
+    cfg["basecamp"] = { "enabled" => true, "project_id" => "11", "message_board_id" => "22", "project_name" => "Payouts" }
+    store.update_shop("sync-test.myshopify.com", "notification_config" => cfg)
+    shop = store.shop("sync-test.myshopify.com")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, basecamp_client: bc)
+
+    app.send(:notify_basecamp_invoice_sent, shop,
+             { "name" => "#1001", "total_price_amount" => 50, "total_price_currency" => "USD" },
+             "buyer@example.com", { "status" => "sent" })
+
+    assert_equal 1, bc.posted.length
+    assert_includes bc.posted.first[:content], "#1001"
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_test_alert_requires_connection
+    slack = FakeSlackClient.new
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: slack)
+
+    response = perform(app, "POST", "/notifications/slack/test", { "shop" => "sync-test.myshopify.com" })
+
+    assert_equal 302, response.status
+    assert_empty slack.webhook_posts
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
+  def test_slack_disconnect_clears_connection
+    store, sync_engine, _client, database_path, config =
+      build_real_sync_engine(FakeShopifyClient.new, { "SLACK_CLIENT_ID" => "cid", "SLACK_CLIENT_SECRET" => "sec" })
+    store.update_slack_connection("sync-test.myshopify.com",
+                                  access_token: "xoxb-real-token", team_name: "Acme HQ", channel: "#alerts")
+    app = SendInvoice::App.new(config: config, store: store, sync_engine: sync_engine,
+                               shopify_client: FakeShopifyClient.new, slack_client: FakeSlackClient.new)
+
+    response = perform(app, "POST", "/auth/slack/disconnect", { "shop" => "sync-test.myshopify.com" })
+
+    assert_equal 302, response.status
+    assert_equal "/notifications", response["Location"]
+    assert_nil store.shop("sync-test.myshopify.com")["slack_access_token"]
+    assert_nil store.shop("sync-test.myshopify.com")["slack_connected_at"]
+  ensure
+    FileUtils.rm_f(database_path) if database_path
+    clear_shopify_env
+  end
+
   def test_onboarding_without_shop_query_uses_single_installed_shop_context
     client = FakeShopifyClient.new
     store, sync_engine, _shopify_client, database_path, config = build_real_sync_engine(client)
@@ -1710,6 +2127,117 @@ class SendInvoiceAppTest < Minitest::Test
 
   private
 
+  class FakeSlackClient
+    attr_reader :exchanged, :webhook_posts
+
+    def initialize(payload = {})
+      @payload = payload
+      @webhook_posts = []
+    end
+
+    def generate_nonce
+      "test-nonce"
+    end
+
+    def authorize_url(redirect_uri, state)
+      "https://slack.com/oauth/v2/authorize?client_id=cid&state=#{state}&redirect_uri=#{redirect_uri}"
+    end
+
+    def exchange_code(code, redirect_uri)
+      @exchanged = { code: code, redirect_uri: redirect_uri }
+      @payload
+    end
+
+    def post_incoming_webhook(webhook_url, text)
+      @webhook_posts << { url: webhook_url, text: text }
+      true
+    end
+
+    def raise_on_message!
+      @raise_on_message = true
+    end
+
+    def post_message(token, channel, text)
+      raise SendInvoice::SlackClient::Error, "channel_not_found" if @raise_on_message
+
+      @messages ||= []
+      @messages << { token: token, channel: channel, text: text }
+      { "ok" => true }
+    end
+
+    def messages
+      @messages ||= []
+    end
+
+    def list_channels(_token, **_opts)
+      @channels || [
+        { "id" => "C100", "name" => "general", "is_private" => false },
+        { "id" => "C200", "name" => "invoices", "is_private" => false },
+        { "id" => "C300", "name" => "finance-private", "is_private" => true }
+      ]
+    end
+
+    def channels=(value)
+      @channels = value
+    end
+  end
+
+  class FakeWhatsAppClient
+    attr_reader :sent
+
+    def initialize
+      @sent = []
+    end
+
+    def send_text(to, body)
+      @sent << { to: to, body: body }
+      { "messages" => [{ "id" => "wamid.TEST" }] }
+    end
+
+    def normalize_number(value)
+      value.to_s.gsub(/[^0-9]/, "")
+    end
+  end
+
+  class FakeBasecampClient
+    attr_reader :posted
+
+    def initialize(projects: nil)
+      @projects = projects
+      @posted = []
+    end
+
+    def generate_nonce
+      "bc-nonce"
+    end
+
+    def authorize_url(redirect_uri, state)
+      "https://launchpad.37signals.com/authorization/new?state=#{state}&redirect_uri=#{redirect_uri}"
+    end
+
+    def exchange_code(_code, _redirect_uri)
+      { "access_token" => "bc-access", "refresh_token" => "bc-refresh", "expires_in" => 1_209_600 }
+    end
+
+    def refresh_access_token(_refresh)
+      { "access_token" => "bc-access-2", "expires_in" => 1_209_600 }
+    end
+
+    def accounts(_token)
+      [{ "id" => 999, "name" => "Acme HQ", "href" => "https://3.basecampapi.com/999" }]
+    end
+
+    def list_projects(_account_id, _token, **_opts)
+      @projects || [{ "id" => 11, "name" => "Payouts", "message_board_id" => 22 }]
+    end
+
+    def post_message(account_id, token, project_id, board_id, subject, content)
+      @posted << { account_id: account_id, token: token, project_id: project_id,
+                   board_id: board_id, subject: subject, content: content }
+      { "id" => 123 }
+    end
+  end
+
   class FakeShopifyClient
     attr_reader :calls
 
@@ -2216,6 +2744,12 @@ class SendInvoiceAppTest < Minitest::Test
     ENV.delete("SMTP_FROM_EMAIL")
     ENV.delete("SMTP_FROM_NAME")
     ENV.delete("SMTP_USE_TLS")
+    ENV.delete("SLACK_CLIENT_ID")
+    ENV.delete("SLACK_CLIENT_SECRET")
+    ENV.delete("WHATSAPP_PHONE_NUMBER_ID")
+    ENV.delete("WHATSAPP_ACCESS_TOKEN")
+    ENV.delete("BASECAMP_CLIENT_ID")
+    ENV.delete("BASECAMP_CLIENT_SECRET")
   end
 
   def perform(app, method, path, query = {}, cookies = [], body = "", headers = {})

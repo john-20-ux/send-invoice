@@ -7,6 +7,9 @@ require "send_invoice/configuration"
 require "send_invoice/database"
 require "send_invoice/migrator"
 require "send_invoice/shopify_client"
+require "send_invoice/slack_client"
+require "send_invoice/whatsapp_client"
+require "send_invoice/basecamp_client"
 require "send_invoice/store"
 require "send_invoice/sync_engine"
 
@@ -29,11 +32,15 @@ module SendInvoice
       end
 
       shopify_client = ShopifyClient.new(config)
+      slack_client = SlackClient.new(config)
+      whatsapp_client = WhatsAppClient.new(config)
+      basecamp_client = BasecampClient.new(config)
       Thread.new { register_webhooks(config, store, shopify_client) } unless config.mock_mode?
       sync_engine = SyncEngine.new(config: config, store: store, shopify_client: shopify_client)
       sync_engine.start_scheduler
       sync_engine.start_uninstall_cleanup_worker
-      application = App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client)
+      application = App.new(config: config, store: store, sync_engine: sync_engine, shopify_client: shopify_client,
+                            slack_client: slack_client, whatsapp_client: whatsapp_client, basecamp_client: basecamp_client)
 
       server = WEBrick::HTTPServer.new(
         Port: config.port,

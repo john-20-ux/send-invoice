@@ -238,6 +238,25 @@ module SendInvoice
         ensure_column(db, "shops", "subscription_id", "TEXT")
         ensure_column(db, "shops", "plan_status", "TEXT")
 
+        # Slack OAuth v2 connection. Token + webhook URL are secrets and are
+        # stored encrypted at rest (see Store#update_shop).
+        ensure_column(db, "shops", "slack_access_token", "TEXT")
+        ensure_column(db, "shops", "slack_team_id", "TEXT")
+        ensure_column(db, "shops", "slack_team_name", "TEXT")
+        ensure_column(db, "shops", "slack_scope", "TEXT")
+        ensure_column(db, "shops", "slack_channel", "TEXT")
+        ensure_column(db, "shops", "slack_incoming_webhook_url", "TEXT")
+        ensure_column(db, "shops", "slack_connected_at", "TEXT")
+
+        # Basecamp OAuth 2 connection. Access/refresh tokens are secrets and are
+        # stored encrypted at rest (see Store#update_shop).
+        ensure_column(db, "shops", "basecamp_access_token", "TEXT")
+        ensure_column(db, "shops", "basecamp_refresh_token", "TEXT")
+        ensure_column(db, "shops", "basecamp_token_expires_at", "TEXT")
+        ensure_column(db, "shops", "basecamp_account_id", "TEXT")
+        ensure_column(db, "shops", "basecamp_account_name", "TEXT")
+        ensure_column(db, "shops", "basecamp_connected_at", "TEXT")
+
         ensure_column(db, "orders", "updated_at", "TEXT")
         ensure_column(db, "shops", "uninstalled_at", "TEXT")
         ensure_column(db, "shops", "scheduled_for_deletion_at", "TEXT")

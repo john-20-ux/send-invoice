@@ -27,9 +27,18 @@ module SendInvoice
                 :shopify_api_key,
                 :shopify_api_secret,
                 :shopify_scopes,
+                :slack_client_id,
+                :slack_client_secret,
+                :slack_scopes,
                 :sync_api_secret,
                 :uninstall_cleanup_interval_seconds,
-                :views_path
+                :views_path,
+                :whatsapp_phone_number_id,
+                :whatsapp_access_token,
+                :whatsapp_api_version,
+                :basecamp_client_id,
+                :basecamp_client_secret,
+                :basecamp_user_agent
 
     def self.load(root:)
       env = {}
@@ -69,6 +78,20 @@ module SendInvoice
       @shopify_api_secret = env["SHOPIFY_API_SECRET"].to_s
       @shopify_scopes = env.fetch("SHOPIFY_SCOPES", "read_orders").split(",").map(&:strip).reject(&:empty?)
       @api_version = env["SHOPIFY_API_VERSION"] || "2026-04"
+      # Slack OAuth v2 (workspace install / incoming-webhook) credentials.
+      @slack_client_id = env["SLACK_CLIENT_ID"].to_s
+      @slack_client_secret = env["SLACK_CLIENT_SECRET"].to_s
+      @slack_scopes = env.fetch("SLACK_SCOPES", "chat:write,chat:write.public,channels:read,groups:read").split(",").map(&:strip).reject(&:empty?)
+      # WhatsApp — Meta Cloud API. Business-level credentials (one number for the
+      # whole app), so these live in env rather than per-shop OAuth.
+      @whatsapp_phone_number_id = env["WHATSAPP_PHONE_NUMBER_ID"].to_s
+      @whatsapp_access_token = env["WHATSAPP_ACCESS_TOKEN"].to_s
+      @whatsapp_api_version = env["WHATSAPP_API_VERSION"] || "v21.0"
+      # Basecamp OAuth 2 (per-shop). Register an app at launchpad.37signals.com.
+      # Basecamp requires a User-Agent that identifies the app + a contact.
+      @basecamp_client_id = env["BASECAMP_CLIENT_ID"].to_s
+      @basecamp_client_secret = env["BASECAMP_CLIENT_SECRET"].to_s
+      @basecamp_user_agent = env["BASECAMP_USER_AGENT"] || "Send Invoice (support@send-invoice.app)"
       @auto_sync_enabled = env["AUTO_SYNC_ENABLED"] == "true"
       # Order webhook topics (ORDERS_CREATE/UPDATED/EDITED) carry protected customer
       # data and require approved Protected Customer Data access in the Partner
@@ -131,6 +154,26 @@ module SendInvoice
 
     def smtp_configured?
       !@smtp_host.empty? && !@smtp_from_email.empty?
+    end
+
+    def slack_configured?
+      !@slack_client_id.empty? && !@slack_client_secret.empty?
+    end
+
+    def slack_redirect_uri
+      "#{@host.sub(%r{/\z}, '')}/auth/slack/callback"
+    end
+
+    def whatsapp_configured?
+      !@whatsapp_phone_number_id.empty? && !@whatsapp_access_token.empty?
+    end
+
+    def basecamp_configured?
+      !@basecamp_client_id.empty? && !@basecamp_client_secret.empty?
+    end
+
+    def basecamp_redirect_uri
+      "#{@host.sub(%r{/\z}, '')}/auth/basecamp/callback"
     end
 
     def db_queue_backend?

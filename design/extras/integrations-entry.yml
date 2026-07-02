@@ -1,0 +1,12 @@
+# Paste this block into Basecamp's extras repo integrations.yml (keep the list's
+# alphabetical / existing ordering). See README.md in this folder for the steps.
+#
+# NOTE: pick `category:` from the numbered categories listed at the TOP of that
+# repo's integrations.yml (an Accounting / Invoicing category is the best fit).
+# The instructions say icons go in `icons/`, but the sample entry uses an
+# `extras/` image path — match whatever the current repo actually uses.
+- title: "Send Invoice"
+  description: "Auto-generate invoices for your Shopify orders and post an update to a Basecamp message board every time an invoice is sent."
+  url: "https://YOUR-DOMAIN/integrations/basecamp"
+  image: icons/send-invoice.png
+  category: 1
